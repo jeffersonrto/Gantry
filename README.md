@@ -5,9 +5,9 @@
 
 ![Preview of the plugin](./assets/screenshot.png)
 
-Container monitoring and management plugin for [DankMaterialShell](https://danklinux.com/)
-
-Inspired by GNOME extension [Easy Docker Containers](https://extensions.gnome.org/extension/2224/easy-docker-containers/)
+Container monitoring and management plugin for [DankMaterialShell](https://danklinux.com/),
+built on [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager) and taking
+interface cues from [containerManager](https://github.com/distsystem/dms-plugins/tree/main/containerManager).
 
 ## Features
 
@@ -99,3 +99,23 @@ Gantry supports keyboard navigation when the popout is open:
 **View Mode:**
 - `V` - Toggle between Container view and Compose Project view
 
+## Credits
+
+Gantry draws on two plugins that solve this problem for DankMaterialShell:
+
+- [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager) by LuckShiba —
+  the project Gantry is forked from, and the base of its service, widget and
+  keyboard navigation design.
+- [containerManager](https://github.com/distsystem/dms-plugins/tree/main/containerManager)
+  by distsystem — an independent take on multi-runtime container management, used
+  as a reference for the interface.
+
+Both are worth a look if Gantry is not what you are after.
+
+The original plugin was itself inspired by the GNOME extension
+[Easy Docker Containers](https://extensions.gnome.org/extension/2224/easy-docker-containers/).
+
+## License
+
+GPL-3.0, inherited from [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager).
+See [LICENSE](./LICENSE).
