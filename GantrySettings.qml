@@ -23,12 +23,80 @@ PluginSettings {
         wrapMode: Text.WordWrap
     }
 
-    StringSetting {
-        settingKey: "dockerBinary"
-        label: "Container Runtime Binary"
-        description: "Path or name of the container runtime binary to use (e.g., 'docker' or 'podman')."
-        defaultValue: GantryService.defaults.dockerBinary
-        placeholder: GantryService.defaults.dockerBinary
+    Column {
+        id: runtimesSetting
+
+        readonly property string settingKey: "runtimes"
+        property var items: GantryService.defaults.runtimes
+
+        width: parent.width
+        spacing: Theme.spacingS
+
+        // PluginSettings calls loadValue() on every child that defines it, both
+        // on first show and whenever the plugin's data changes elsewhere.
+        function loadValue() {
+            items = GantryService.normalizeRuntimes(root.loadValue(settingKey, GantryService.defaults.runtimes));
+        }
+
+        function updateItem(index, changes) {
+            const next = items.map((rt, i) => i === index ? Object.assign({}, rt, changes) : Object.assign({}, rt));
+            items = next;
+            root.saveValue(settingKey, next);
+        }
+
+        Component.onCompleted: Qt.callLater(loadValue)
+
+        StyledText {
+            text: "Container Runtimes"
+            font.pixelSize: Theme.fontSizeMedium
+            font.weight: Font.Medium
+            color: Theme.surfaceText
+        }
+
+        StyledText {
+            width: parent.width
+            text: "Enable the runtimes you want Gantry to monitor. Containers from every enabled runtime appear in one list."
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceVariantText
+            wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+            model: runtimesSetting.items
+
+            Column {
+                required property int index
+                required property var modelData
+
+                width: runtimesSetting.width
+                spacing: Theme.spacingXS
+                topPadding: Theme.spacingXS
+
+                DankToggle {
+                    width: parent.width
+                    text: modelData.label
+                    description: modelData.enabled ? "Monitored" : "Not monitored"
+                    checked: modelData.enabled
+                    onToggled: isChecked => runtimesSetting.updateItem(index, {
+                            enabled: isChecked
+                        })
+                }
+
+                DankTextField {
+                    width: parent.width
+                    enabled: modelData.enabled
+                    opacity: modelData.enabled ? 1 : 0.5
+                    text: modelData.binary
+                    placeholderText: modelData.id
+                    onEditingFinished: {
+                        if (text !== modelData.binary)
+                            runtimesSetting.updateItem(index, {
+                                binary: text
+                            });
+                    }
+                }
+            }
+        }
     }
 
     SliderSetting {

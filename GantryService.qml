@@ -11,7 +11,20 @@ Item {
 
     readonly property var defaults: ({
             debounceDelay: 300,
-            dockerBinary: "docker",
+            runtimes: [
+                {
+                    id: "docker",
+                    label: "Docker",
+                    binary: "docker",
+                    enabled: true
+                },
+                {
+                    id: "podman",
+                    label: "Podman",
+                    binary: "podman",
+                    enabled: true
+                }
+            ],
             terminalApp: "alacritty --hold",
             shellPath: "/bin/sh",
             pollingInterval: 0
@@ -22,15 +35,37 @@ Item {
     property bool systemdRunAvailable: false
     property bool dockerAvailable: false
     property int debounceDelay: defaults.debounceDelay
-    property string dockerBinary: defaults.dockerBinary
+    property var runtimes: defaults.runtimes
     property string terminalApp: defaults.terminalApp
     property string shellPath: defaults.shellPath
     property int pollingInterval: defaults.pollingInterval
 
+    readonly property var enabledRuntimes: runtimes.filter(rt => rt.enabled)
+
+    // Transitional: the collection and action code still drives a single binary.
+    // Phases 2-5 replace every use of this with per-runtime routing.
+    readonly property string primaryBinary: enabledRuntimes.length > 0 ? enabledRuntimes[0].binary : ""
+
+    // Settings are user-editable JSON; a half-written entry must not poison the
+    // rest of the list, so every field falls back to a sane value.
+    function normalizeRuntimes(list) {
+        if (!Array.isArray(list))
+            return defaults.runtimes;
+
+        const normalized = list.filter(rt => rt && rt.id).map(rt => ({
+                    id: String(rt.id),
+                    label: rt.label ? String(rt.label) : String(rt.id),
+                    binary: rt.binary ? String(rt.binary) : String(rt.id),
+                    enabled: rt.enabled !== false
+                }));
+
+        return normalized.length > 0 ? normalized : defaults.runtimes;
+    }
+
     function loadSettings() {
         const load = key => PluginService.loadPluginData(pluginId, key) || defaults[key];
         debounceDelay = load("debounceDelay");
-        dockerBinary = load("dockerBinary");
+        runtimes = normalizeRuntimes(load("runtimes"));
         terminalApp = load("terminalApp");
         shellPath = load("shellPath");
         pollingInterval = load("pollingInterval");
@@ -53,10 +88,10 @@ Item {
     }
 
     function getDockerEventCommand() {
-        return [dockerBinary, "events", "--format", "json", "--filter", "type=container"];
+        return [primaryBinary, "events", "--format", "json", "--filter", "type=container"];
     }
 
-    onDockerBinaryChanged: {
+    onRuntimesChanged: {
         eventsProcess.running = false;
         eventsProcess.command = getDockerEventCommand();
         eventsProcess.running = true;
@@ -130,7 +165,7 @@ Item {
     }
 
     function refresh() {
-        Proc.runCommand(`${pluginId}.dockerCheck`, [dockerBinary, "info"], (stdout, exitCode) => {
+        Proc.runCommand(`${pluginId}.dockerCheck`, [primaryBinary, "info"], (stdout, exitCode) => {
             root.dockerAvailable = exitCode === 0;
             PluginService.setGlobalVar("gantry", "dockerAvailable", dockerAvailable);
             if (dockerAvailable) {
@@ -142,7 +177,7 @@ Item {
     }
 
     function fetchContainers() {
-        Proc.runCommand(`${pluginId}.dockerInspect`, ["sh", "-c", `${dockerBinary} container inspect $(${dockerBinary} container ls -aq)`], (stdout, exitCode) => {
+        Proc.runCommand(`${pluginId}.dockerInspect`, ["sh", "-c", `${primaryBinary} container inspect $(${primaryBinary} container ls -aq)`], (stdout, exitCode) => {
             if (exitCode === 0) {
                 try {
                     const containers = JSON.parse(stdout).map(container => {
@@ -250,11 +285,11 @@ Item {
 
     function executeAction(containerId, action) {
         const commands = {
-            start: [dockerBinary, "start", containerId],
-            stop: [dockerBinary, "stop", containerId],
-            restart: [dockerBinary, "restart", containerId],
-            pause: [dockerBinary, "pause", containerId],
-            unpause: [dockerBinary, "unpause", containerId]
+            start: [primaryBinary, "start", containerId],
+            stop: [primaryBinary, "stop", containerId],
+            restart: [primaryBinary, "restart", containerId],
+            pause: [primaryBinary, "pause", containerId],
+            unpause: [primaryBinary, "unpause", containerId]
         };
 
         if (commands[action]) {
@@ -275,17 +310,17 @@ Item {
         }
 
         const composeCommands = {
-            up: [dockerBinary, "compose", "-f", configFile, "up", "-d"],
-            down: [dockerBinary, "compose", "-f", configFile, "down"],
-            restart: [dockerBinary, "compose", "-f", configFile, "restart"],
-            stop: [dockerBinary, "compose", "-f", configFile, "stop"],
-            start: [dockerBinary, "compose", "-f", configFile, "start"],
-            pull: [dockerBinary, "compose", "-f", configFile, "pull"],
+            up: [primaryBinary, "compose", "-f", configFile, "up", "-d"],
+            down: [primaryBinary, "compose", "-f", configFile, "down"],
+            restart: [primaryBinary, "compose", "-f", configFile, "restart"],
+            stop: [primaryBinary, "compose", "-f", configFile, "stop"],
+            start: [primaryBinary, "compose", "-f", configFile, "start"],
+            pull: [primaryBinary, "compose", "-f", configFile, "pull"],
             logs: null
         };
 
         if (action === "logs") {
-            const cmd = `cd "${workingDir}" && ${dockerBinary} compose -f ${configFile} logs -f`;
+            const cmd = `cd "${workingDir}" && ${primaryBinary} compose -f ${configFile} logs -f`;
             Quickshell.execDetached(["sh", "-c", `${terminalApp} -e sh -c '${cmd}'`]);
             return true;
         }
@@ -303,10 +338,10 @@ Item {
     }
 
     function openLogs(containerId) {
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + dockerBinary + " logs -f " + containerId]);
+        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + primaryBinary + " logs -f " + containerId]);
     }
 
     function openExec(containerId) {
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + dockerBinary + " exec -it " + containerId + " " + shellPath]);
+        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + primaryBinary + " exec -it " + containerId + " " + shellPath]);
     }
 }
