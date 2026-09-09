@@ -1,8 +1,11 @@
-# DMS Docker Manager
+# Gantry
+
+> Gantry is a fork of [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager)
+> by LuckShiba, extended with multi-runtime support. Licensed under GPL-3.0.
 
 ![Preview of the plugin](./assets/screenshot.png)
 
-Docker container monitoring and management plugin for [DankMaterialShell](https://danklinux.com/)
+Container monitoring and management plugin for [DankMaterialShell](https://danklinux.com/)
 
 Inspired by GNOME extension [Easy Docker Containers](https://extensions.gnome.org/extension/2224/easy-docker-containers/)
 
@@ -23,7 +26,7 @@ Inspired by GNOME extension [Easy Docker Containers](https://extensions.gnome.or
 ### Using DMS cli
 
 ```sh
-dms plugins install dockerManager
+dms plugins install gantry
 ```
 
 ### Using DMS Settings
@@ -31,18 +34,18 @@ dms plugins install dockerManager
 1. Open Settings -> Plugins
 2. Click in "Browse"
 3. Enable third party plugins
-4. Install and enable Docker Manager
-5. Add "Docker Manager" to your DankBar widgets list
+4. Install and enable Gantry
+5. Add "Gantry" to your DankBar widgets list
 
 ### Manual
 
-1. Copy plugin directory to `~/.config/DankMaterialShell/plugins/DockerManager`
+1. Copy plugin directory to `~/.config/DankMaterialShell/plugins/gantry`
 ```sh
-git clone https://github.com/LuckShiba/DmsDockerManager ~/.config/DankMaterialShell/plugins/DockerManager
+git clone https://github.com/jeffersonrto/Gantry ~/.config/DankMaterialShell/plugins/gantry
 ```
 2. Open Settings -> Plugins and click in "Scan"
-3. Enable "Docker Manager"
-4. Add "Docker Manager" to your DankBar widgets list
+3. Enable "Gantry"
+4. Add "Gantry" to your DankBar widgets list
 
 ## Requirements
 
@@ -78,7 +81,7 @@ If you have a Docker Compose project, you can select in the widget to manage the
 
 ### Keyboard Navigation
 
-The Docker Manager supports keyboard navigation when the popout is open:
+Gantry supports keyboard navigation when the popout is open:
 
 **Basic Navigation:**
 - `Up/Down` or `Ctrl+K/J` or `Ctrl+P/N` or `Tab/Shift+Tab` - Navigate between items

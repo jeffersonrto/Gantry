@@ -49,8 +49,8 @@ PluginComponent {
     }
 
     Component.onCompleted: {
-        // Note: the import of DockerService here is necessary because Singletons are lazy-loaded in QML.
-        console.log(DockerService.pluginId, "loaded.");
+        // Note: the import of GantryService here is necessary because Singletons are lazy-loaded in QML.
+        console.log(GantryService.pluginId, "loaded.");
     }
 
     PluginGlobalVar {
@@ -78,7 +78,7 @@ PluginComponent {
         onValueChanged: {
             if (globalComposeProjects.value.length === 0 && root.groupByCompose) {
                 root.groupByCompose = false;
-                root.pluginService?.savePluginData("dockerManager", "groupByCompose", false);
+                root.pluginService?.savePluginData("gantry", "groupByCompose", false);
             }
         }
     }
@@ -114,23 +114,23 @@ PluginComponent {
     }
 
     function executeAction(containerId, action) {
-        if (DockerService.executeAction(containerId, action)) {
+        if (GantryService.executeAction(containerId, action)) {
             ToastService.showInfo("Executing " + action + " on container");
         }
     }
 
     function executeComposeAction(workingDir, configFile, action) {
-        if (DockerService.executeComposeAction(workingDir, configFile, action)) {
+        if (GantryService.executeComposeAction(workingDir, configFile, action)) {
             ToastService.showInfo("Executing " + action + " on project");
         }
     }
 
     function openLogs(containerId) {
-        DockerService.openLogs(containerId);
+        GantryService.openLogs(containerId);
     }
 
     function openExec(containerId) {
-        DockerService.openExec(containerId);
+        GantryService.openExec(containerId);
     }
 
     function buildNavigableList() {
@@ -351,7 +351,7 @@ PluginComponent {
     
     function toggleViewMode() {
         groupByCompose = !groupByCompose;
-        pluginService?.savePluginData("dockerManager", "groupByCompose", groupByCompose);
+        pluginService?.savePluginData("gantry", "groupByCompose", groupByCompose);
         selectedItemId = "";
         selectedIsContainer = false;
         selectedParentProject = "";
@@ -366,7 +366,7 @@ PluginComponent {
         return globalComposeProjects.value.findIndex(p => p.name === projectName);
     }
 
-    component DockerIcon: DankNFIcon {
+    component RuntimeIcon: DankNFIcon {
         name: "docker"
         size: root.iconSize
         color: {
@@ -378,7 +378,7 @@ PluginComponent {
         }
     }
 
-    component DockerCount: StyledText {
+    component RuntimeCount: StyledText {
         text: globalRunningContainers.value.toString()
         font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
         color: Theme.widgetTextColor || Theme.surfaceText
@@ -814,11 +814,11 @@ PluginComponent {
     horizontalBarPill: Row {
         spacing: Theme.spacingXS
 
-        DockerIcon {
+        RuntimeIcon {
             anchors.verticalCenter: parent.verticalCenter
         }
 
-        DockerCount {
+        RuntimeCount {
             anchors.verticalCenter: parent.verticalCenter
         }
     }
@@ -826,11 +826,11 @@ PluginComponent {
     verticalBarPill: Column {
         spacing: Theme.spacingXS
 
-        DockerIcon {
+        RuntimeIcon {
             anchors.horizontalCenter: parent.horizontalCenter
         }
 
-        DockerCount {
+        RuntimeCount {
             anchors.horizontalCenter: parent.horizontalCenter
         }
     }
@@ -913,7 +913,7 @@ PluginComponent {
                             isActive: !root.groupByCompose
                             onClicked: {
                                 root.groupByCompose = false;
-                                root.pluginService?.savePluginData("dockerManager", "groupByCompose", false);
+                                root.pluginService?.savePluginData("gantry", "groupByCompose", false);
                             }
                         }
 
@@ -922,7 +922,7 @@ PluginComponent {
                             isActive: root.groupByCompose
                             onClicked: {
                                 root.groupByCompose = true;
-                                root.pluginService?.savePluginData("dockerManager", "groupByCompose", true);
+                                root.pluginService?.savePluginData("gantry", "groupByCompose", true);
                             }
                         }
                     }

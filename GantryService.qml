@@ -17,7 +17,7 @@ Item {
             pollingInterval: 0
         })
 
-    readonly property string pluginId: "dockerManager"
+    readonly property string pluginId: "gantry"
 
     property bool systemdRunAvailable: false
     property bool dockerAvailable: false
@@ -80,18 +80,18 @@ Item {
                     const action = event.Status || event.status;
 
                     if (["start", "stop", "die", "died", "kill", "restart", "pause", "unpause", "create", "destroy", "remove", "cleanup"].includes(action)) {
-                        console.log(`DockerManager: Container event detected - ${action}`);
+                        console.log(`Gantry: Container event detected - ${action}`);
                         debounceTimer.restart();
                     }
                 } catch (e) {
-                    console.error("DockerManager: Failed to parse docker event:", e, data);
+                    console.error("Gantry: Failed to parse docker event:", e, data);
                 }
             }
         }
 
         onRunningChanged: {
             if (!running) {
-                console.log("DockerManager: Docker events process not running");
+                console.log("Gantry: Docker events process not running");
                 restartTimer.start();
             }
         }
@@ -103,7 +103,7 @@ Item {
         repeat: false
         onTriggered: {
             if (dockerAvailable) {
-                console.log("DockerManager: Attempting to restart events listener...");
+                console.log("Gantry: Attempting to restart events listener...");
                 eventsProcess.running = true;
             }
         }
@@ -114,7 +114,7 @@ Item {
         running: root.dockerAvailable && root.pollingInterval > 0
         repeat: true
         onTriggered: {
-            console.log("DockerManager: Polling for container state updates");
+            console.log("Gantry: Polling for container state updates");
             fetchContainers();
         }
     }
@@ -132,7 +132,7 @@ Item {
     function refresh() {
         Proc.runCommand(`${pluginId}.dockerCheck`, [dockerBinary, "info"], (stdout, exitCode) => {
             root.dockerAvailable = exitCode === 0;
-            PluginService.setGlobalVar("dockerManager", "dockerAvailable", dockerAvailable);
+            PluginService.setGlobalVar("gantry", "dockerAvailable", dockerAvailable);
             if (dockerAvailable) {
                 fetchContainers();
             } else {
@@ -188,7 +188,7 @@ Item {
                                 composeConfigFiles: labels["com.docker.compose.project.config_files"] || "compose.yaml"
                             };
                         } catch (e) {
-                            console.error("DockerManager: Failed to parse container data:", e, container);
+                            console.error("Gantry: Failed to parse container data:", e, container);
                             return null;
                         }
                     }).filter(c => c !== null).sort((a, b) => {
@@ -233,7 +233,7 @@ Item {
                         return a.name.localeCompare(b.name);
                     }));
                 } catch (e) {
-                    console.error("DockerManager: Failed to parse docker inspect output:", e);
+                    console.error("Gantry: Failed to parse docker inspect output:", e);
                     updateContainers();
                 }
             } else {
@@ -270,7 +270,7 @@ Item {
 
     function executeComposeAction(workingDir, configFile, action) {
         if (!workingDir) {
-            console.error("DockerManager: Cannot execute compose action without working directory");
+            console.error("Gantry: Cannot execute compose action without working directory");
             return false;
         }
 

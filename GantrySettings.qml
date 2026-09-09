@@ -5,11 +5,11 @@ import qs.Modules.Plugins
 
 PluginSettings {
     id: root
-    pluginId: DockerService.pluginId
+    pluginId: GantryService.pluginId
 
     StyledText {
         width: parent.width
-        text: "Docker Manager Settings"
+        text: "Gantry Settings"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
         color: Theme.surfaceText
@@ -17,7 +17,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Configure how Docker containers are monitored and managed from your bar."
+        text: "Configure how containers are monitored and managed from your bar."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -27,15 +27,15 @@ PluginSettings {
         settingKey: "dockerBinary"
         label: "Container Runtime Binary"
         description: "Path or name of the container runtime binary to use (e.g., 'docker' or 'podman')."
-        defaultValue: DockerService.defaults.dockerBinary
-        placeholder: DockerService.defaults.dockerBinary
+        defaultValue: GantryService.defaults.dockerBinary
+        placeholder: GantryService.defaults.dockerBinary
     }
 
     SliderSetting {
         settingKey: "debounceDelay"
         label: "Debounce Delay"
-        description: "Delay before refreshing container list after Docker events (prevents excessive updates during rapid changes)."
-        defaultValue: DockerService.defaults.debounceDelay
+        description: "Delay before refreshing container list after container events (prevents excessive updates during rapid changes)."
+        defaultValue: GantryService.defaults.debounceDelay
         minimum: 100
         maximum: 2000
         unit: "ms"
@@ -46,7 +46,7 @@ PluginSettings {
         settingKey: "pollingInterval"
         label: "Background Polling Interval"
         description: "Fallback polling interval to refresh container state. Useful when event-based updates don't work reliably in the background. Set to 0 to disable polling."
-        defaultValue: DockerService.defaults.pollingInterval
+        defaultValue: GantryService.defaults.pollingInterval
         minimum: 0
         maximum: 120000
         unit: "ms"
@@ -57,16 +57,16 @@ PluginSettings {
         settingKey: "terminalApp"
         label: "Terminal Application"
         description: "Command used to launch terminal windows for exec and logs."
-        defaultValue: DockerService.defaults.terminalApp
-        placeholder: DockerService.defaults.terminalApp
+        defaultValue: GantryService.defaults.terminalApp
+        placeholder: GantryService.defaults.terminalApp
     }
 
     StringSetting {
         settingKey: "shellPath"
         label: "Shell Path"
         description: "Shell to use when executing commands in containers (note: many containers will only have /bin/sh installed.)"
-        defaultValue: DockerService.defaults.shellPath
-        placeholder: DockerService.defaults.shellPath
+        defaultValue: GantryService.defaults.shellPath
+        placeholder: GantryService.defaults.shellPath
     }
 
     ToggleSetting {

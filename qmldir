@@ -1,1 +1,1 @@
-singleton DockerService 1.0 DockerService.qml
+singleton GantryService 1.0 GantryService.qml
