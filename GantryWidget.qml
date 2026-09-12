@@ -698,6 +698,8 @@ PluginComponent {
                 font.weight: Font.Medium
                 color: Theme.surfaceText
                 elide: Text.ElideRight
+                wrapMode: Text.NoWrap
+                maximumLineCount: 1
                 width: parent.width
             }
 
@@ -707,6 +709,8 @@ PluginComponent {
                 font.pixelSize: 11
                 color: Theme.surfaceVariantText
                 elide: Text.ElideRight
+                wrapMode: Text.NoWrap
+                maximumLineCount: 1
                 width: parent.width
                 visible: text !== ""
             }
@@ -986,6 +990,8 @@ PluginComponent {
                                     font.weight: Font.Medium
                                     color: Theme.surfaceText
                                     elide: Text.ElideRight
+                                    wrapMode: Text.NoWrap
+                                    maximumLineCount: 1
                                     anchors.verticalCenter: parent.verticalCenter
                                     // The name is the last thing to give up space.
                                     width: Math.min(implicitWidth, Math.max(60, parent.width - (rowBadge.visible ? rowBadge.width + 6 : 0) - 70))
@@ -1004,6 +1010,8 @@ PluginComponent {
                                     font.pixelSize: 11
                                     color: Theme.surfaceVariantText
                                     elide: Text.ElideRight
+                                    wrapMode: Text.NoWrap
+                                    maximumLineCount: 1
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: Math.max(0, parent.width - x)
                                 }
@@ -1067,6 +1075,8 @@ PluginComponent {
                                         font.weight: Font.Medium
                                         color: Theme.surfaceText
                                         elide: Text.ElideRight
+                                        wrapMode: Text.NoWrap
+                                        maximumLineCount: 1
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
 
@@ -1396,6 +1406,8 @@ PluginComponent {
                                                 font.weight: Font.Medium
                                                 color: Theme.surfaceText
                                                 elide: Text.ElideRight
+                                                wrapMode: Text.NoWrap
+                                                maximumLineCount: 1
                                                 width: parent.width
                                             }
 
@@ -1410,6 +1422,8 @@ PluginComponent {
                                                 font.pixelSize: 11
                                                 color: Theme.surfaceVariantText
                                                 elide: Text.ElideRight
+                                                wrapMode: Text.NoWrap
+                                                maximumLineCount: 1
                                                 width: parent.width
                                             }
                                         }
@@ -1465,6 +1479,8 @@ PluginComponent {
                                     color: Theme.surfaceText
                                     width: parent.width
                                     elide: Text.ElideRight
+                                    wrapMode: Text.NoWrap
+                                    maximumLineCount: 1
                                 }
 
                                 StyledText {
