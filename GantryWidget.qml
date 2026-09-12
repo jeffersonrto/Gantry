@@ -105,15 +105,15 @@ PluginComponent {
         }
     }
 
-    function toggleProject(projectName) {
-        const wasExpanded = root.expandedProjects[projectName] || false;
+    function toggleProject(projectKey) {
+        const wasExpanded = root.expandedProjects[projectKey] || false;
         const expanded = root.expandedProjects;
-        expanded[projectName] = !expanded[projectName];
+        expanded[projectKey] = !expanded[projectKey];
         root.expandedProjects = expanded;
         root.expandedProjectsChanged();
         
         if (!wasExpanded && !keyboardNavigationActive && autoScrollOnExpand) {
-            selectedItemId = projectName;
+            selectedItemId = projectKey;
             selectedIsContainer = false;
             selectedParentProject = "";
             scrollTimer.restart();
@@ -147,14 +147,14 @@ PluginComponent {
         
         const list = [];
         globalComposeProjects.value.forEach(project => {
-            list.push({type: 'project', id: project.name, data: project});
-            if (expandedProjects[project.name]) {
+            list.push({type: 'project', id: project.key, data: project});
+            if (expandedProjects[project.key]) {
                 project.containers.forEach(container => {
                     list.push({
                         type: 'container', 
-                        id: container.name, 
+                        id: container.key, 
                         data: container, 
-                        parentProject: project.name
+                        parentProject: project.key
                     });
                 });
             }
@@ -369,8 +369,8 @@ PluginComponent {
     function getSelectedProjectIndex() {
         if (!groupByCompose || !selectedItemId) return -1;
         
-        const projectName = selectedIsContainer ? selectedParentProject : selectedItemId;
-        return globalComposeProjects.value.findIndex(p => p.name === projectName);
+        const projectKey = selectedIsContainer ? selectedParentProject : selectedItemId;
+        return globalComposeProjects.value.findIndex(p => p.key === projectKey);
     }
 
     component RuntimeIcon: DankNFIcon {
@@ -1033,8 +1033,8 @@ PluginComponent {
                         }
                         clip: true
 
-                        property bool isExpanded: root.expandedProjects[modelData.name] || false
-                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && !root.selectedIsContainer && root.selectedItemId === modelData.name
+                        property bool isExpanded: root.expandedProjects[modelData.key] || false
+                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && !root.selectedIsContainer && root.selectedItemId === modelData.key
 
                         ProjectHeader {
                             id: projectHeaderPart
@@ -1047,7 +1047,7 @@ PluginComponent {
                             isCurrentItem: projectDelegate.isCurrentItem
                             color: "transparent"
                             border.width: 0
-                            onClicked: root.toggleProject(modelData.name)
+                            onClicked: root.toggleProject(modelData.key)
                         }
 
                         Column {
@@ -1120,8 +1120,8 @@ PluginComponent {
                                         clip: true
 
                                         property var container: modelData
-                                        property bool isExpanded: root.expandedContainers[container.name] || false
-                                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && root.selectedIsContainer && root.selectedItemId === container.name
+                                        property bool isExpanded: root.expandedContainers[container.key] || false
+                                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && root.selectedIsContainer && root.selectedItemId === container.key
 
                                         ContainerHeader {
                                             id: serviceHeaderPart
@@ -1136,7 +1136,7 @@ PluginComponent {
                                             defaultColor: "transparent"
                                             hoverColor: Theme.surfaceHover
                                             border.width: 0
-                                            onClicked: root.toggleContainer(container.name, projectContentPart.project.name)
+                                            onClicked: root.toggleContainer(container.key, projectContentPart.project.key)
                                         }
 
                                         ContainerActions {

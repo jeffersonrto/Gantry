@@ -230,105 +230,167 @@ Item {
         }
     }
 
+    // Bumped per collection round, so answers from a superseded round can be
+    // dropped instead of decrementing the current round's counter.
+    property int fetchGeneration: 0
+
     function fetchContainers() {
-        Proc.runCommand(`${pluginId}.dockerInspect`, ["sh", "-c", `${primaryBinary} container inspect $(${primaryBinary} container ls -aq)`], (stdout, exitCode) => {
-            if (exitCode === 0) {
-                try {
-                    const containers = JSON.parse(stdout).map(container => {
-                        try {
-                            const labels = container.Config?.Labels || {};
-                            const state = container.State?.Status || "";
-                            const startedAt = new Date(container.State?.StartedAt || 0).getTime();
-                            const finishedAt = new Date(container.State?.FinishedAt || 0).getTime();
-                            const lastActivity = Math.max(startedAt, finishedAt);
-                            
-                            const ports = [];
-                            const portBindings = container.NetworkSettings?.Ports || {};
-                            for (const [containerPort, hostBindings] of Object.entries(portBindings)) {
-                                if (hostBindings && hostBindings.length > 0) {
-                                    hostBindings.forEach(binding => {
-                                        const hostPort = binding.HostPort;
-                                        const hostIp = binding.HostIp || "0.0.0.0";
-                                        if (hostPort) {
-                                            ports.push({
-                                                containerPort: containerPort,
-                                                hostPort: hostPort,
-                                                hostIp: hostIp
-                                            });
-                                        }
-                                    });
-                                }
-                            }
+        const targets = enabledRuntimes.filter(rt => runtimeAvailable[rt.id]);
+        const generation = ++fetchGeneration;
+        let collected = [];
+        let pending = targets.length;
 
-                            return {
-                                id: container.Id || "",
-                                name: container.Name?.replace(/^\//, "") || "",
-                                status: `${state.charAt(0).toUpperCase() + state.slice(1)}`,
-                                state: state,
-                                image: container.Config?.Image || container.ImageName || "",
-                                isRunning: container.State?.Running || false,
-                                isPaused: container.State?.Paused || false,
-                                created: container.Created || "",
-                                lastActivity: lastActivity,
-                                ports: ports,
-                                composeProject: labels["com.docker.compose.project"] || labels["io.podman.compose.project"] || "",
-                                composeService: labels["com.docker.compose.service"] || labels["io.podman.compose.service"] || "",
-                                composeWorkingDir: labels["com.docker.compose.project.working_dir"] || "",
-                                composeConfigFiles: labels["com.docker.compose.project.config_files"] || "compose.yaml"
-                            };
-                        } catch (e) {
-                            console.error("Gantry: Failed to parse container data:", e, container);
-                            return null;
-                        }
-                    }).filter(c => c !== null).sort((a, b) => {
-                        const priority = {
-                            running: 1,
-                            paused: 2,
-                            default: 3
-                        };
-                        const aPriority = priority[a.state] || priority.default;
-                        const bPriority = priority[b.state] || priority.default;
-                        if (aPriority !== bPriority)
-                            return aPriority - bPriority;
-                        if (a.lastActivity !== b.lastActivity)
-                            return b.lastActivity - a.lastActivity;
-                        return a.name.localeCompare(b.name);
-                    });
+        if (pending === 0) {
+            updateContainers();
+            return;
+        }
 
-                    const projectMap = {};
-                    containers.forEach(container => {
-                        if (container.composeProject) {
-                            if (!projectMap[container.composeProject]) {
-                                projectMap[container.composeProject] = {
-                                    name: container.composeProject,
-                                    containers: [],
-                                    runningCount: 0,
-                                    totalCount: 0,
-                                    workingDir: container.composeWorkingDir,
-                                    configFile: container.composeConfigFiles
-                                };
-                            }
-                            projectMap[container.composeProject].containers.push(container);
-                            projectMap[container.composeProject].totalCount++;
-                            if (container.isRunning) {
-                                projectMap[container.composeProject].runningCount++;
-                            }
-                        }
-                    });
-
-                    updateContainers(containers, containers.filter(c => c.isRunning).length, Object.values(projectMap).sort((a, b) => {
-                        if (a.runningCount !== b.runningCount)
-                            return b.runningCount - a.runningCount;
-                        return a.name.localeCompare(b.name);
-                    }));
-                } catch (e) {
-                    console.error("Gantry: Failed to parse docker inspect output:", e);
-                    updateContainers();
+        targets.forEach(rt => {
+            Proc.runCommand(`${pluginId}.inspect.${rt.id}`, ["sh", "-c", `${rt.binary} container inspect $(${rt.binary} container ls -aq)`], (stdout, exitCode) => {
+                if (generation !== fetchGeneration) {
+                    console.log(`Gantry[${rt.id}]: stale container fetch discarded`);
+                    return;
                 }
-            } else {
-                updateContainers();
+
+                // A non-zero exit means this runtime has no containers to list
+                // -- `container inspect` with no ids fails. It is never a reason
+                // to drop what the other runtimes reported.
+                if (exitCode === 0) {
+                    const parsed = parseContainers(stdout, rt);
+                    console.log(`Gantry[${rt.id}]: ${parsed.length} container(s)`);
+                    collected = collected.concat(parsed);
+                } else {
+                    console.log(`Gantry[${rt.id}]: no containers (exit ${exitCode})`);
+                }
+
+                if (--pending === 0) {
+                    publishContainers(generation, collected);
+                }
+            }, 100);
+        });
+    }
+
+    function parseContainers(stdout, rt) {
+        let raw;
+        try {
+            raw = JSON.parse(stdout);
+        } catch (e) {
+            console.error(`Gantry[${rt.id}]: failed to parse inspect output:`, e);
+            return [];
+        }
+
+        return raw.map(container => {
+            try {
+                const labels = container.Config?.Labels || {};
+                const state = container.State?.Status || "";
+                const startedAt = new Date(container.State?.StartedAt || 0).getTime();
+                const finishedAt = new Date(container.State?.FinishedAt || 0).getTime();
+                const lastActivity = Math.max(startedAt, finishedAt);
+
+                const ports = [];
+                const portBindings = container.NetworkSettings?.Ports || {};
+                for (const [containerPort, hostBindings] of Object.entries(portBindings)) {
+                    if (hostBindings && hostBindings.length > 0) {
+                        hostBindings.forEach(binding => {
+                            const hostPort = binding.HostPort;
+                            const hostIp = binding.HostIp || "0.0.0.0";
+                            if (hostPort) {
+                                ports.push({
+                                    containerPort: containerPort,
+                                    hostPort: hostPort,
+                                    hostIp: hostIp
+                                });
+                            }
+                        });
+                    }
+                }
+
+                // Podman omits the leading slash on Name, Docker keeps it.
+                const name = container.Name?.replace(/^\//, "") || "";
+
+                return {
+                    runtime: rt.id,
+                    id: container.Id || "",
+                    name: name,
+                    // Names are only unique within one runtime, so anything that
+                    // keys off a name across the merged list needs this instead.
+                    key: `${rt.id}:${name}`,
+                    status: `${state.charAt(0).toUpperCase() + state.slice(1)}`,
+                    state: state,
+                    image: container.Config?.Image || container.ImageName || "",
+                    isRunning: container.State?.Running || false,
+                    isPaused: container.State?.Paused || false,
+                    created: container.Created || "",
+                    lastActivity: lastActivity,
+                    ports: ports,
+                    composeProject: labels["com.docker.compose.project"] || labels["io.podman.compose.project"] || "",
+                    composeService: labels["com.docker.compose.service"] || labels["io.podman.compose.service"] || "",
+                    composeWorkingDir: labels["com.docker.compose.project.working_dir"] || "",
+                    composeConfigFiles: labels["com.docker.compose.project.config_files"] || "compose.yaml"
+                };
+            } catch (e) {
+                console.error(`Gantry[${rt.id}]: failed to parse container data:`, e, container);
+                return null;
             }
-        }, 100);
+        }).filter(c => c !== null);
+    }
+
+    function publishContainers(generation, collected) {
+        if (generation !== fetchGeneration) {
+            return;
+        }
+
+        // Sorted as one list. Runtime is a badge, not a grouping.
+        const containers = collected.sort((a, b) => {
+            const priority = {
+                running: 1,
+                paused: 2,
+                default: 3
+            };
+            const aPriority = priority[a.state] || priority.default;
+            const bPriority = priority[b.state] || priority.default;
+            if (aPriority !== bPriority)
+                return aPriority - bPriority;
+            if (a.lastActivity !== b.lastActivity)
+                return b.lastActivity - a.lastActivity;
+            return a.name.localeCompare(b.name);
+        });
+
+        const projectMap = {};
+        containers.forEach(container => {
+            if (!container.composeProject) {
+                return;
+            }
+            // Keyed by runtime too: the same project name can exist in both.
+            const key = `${container.runtime}:${container.composeProject}`;
+            if (!projectMap[key]) {
+                projectMap[key] = {
+                    key: key,
+                    runtime: container.runtime,
+                    name: container.composeProject,
+                    containers: [],
+                    runningCount: 0,
+                    totalCount: 0,
+                    workingDir: container.composeWorkingDir,
+                    configFile: container.composeConfigFiles
+                };
+            }
+            projectMap[key].containers.push(container);
+            projectMap[key].totalCount++;
+            if (container.isRunning) {
+                projectMap[key].runningCount++;
+            }
+        });
+
+        const projects = Object.values(projectMap).sort((a, b) => {
+            if (a.runningCount !== b.runningCount)
+                return b.runningCount - a.runningCount;
+            if (a.name !== b.name)
+                return a.name.localeCompare(b.name);
+            return a.runtime.localeCompare(b.runtime);
+        });
+
+        updateContainers(containers, containers.filter(c => c.isRunning).length, projects);
     }
 
     function updateContainers(containers = [], runningContainers = 0, composeProjects = []) {
