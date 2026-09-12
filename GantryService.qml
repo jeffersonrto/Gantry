@@ -33,7 +33,7 @@ Item {
     readonly property string pluginId: "gantry"
 
     property bool systemdRunAvailable: false
-    property bool dockerAvailable: false
+    property var runtimeAvailable: ({})
     property int debounceDelay: defaults.debounceDelay
     property var runtimes: defaults.runtimes
     property string terminalApp: defaults.terminalApp
@@ -42,9 +42,15 @@ Item {
 
     readonly property var enabledRuntimes: runtimes.filter(rt => rt.enabled)
 
-    // Transitional: the collection and action code still drives a single binary.
-    // Phases 2-5 replace every use of this with per-runtime routing.
-    readonly property string primaryBinary: enabledRuntimes.length > 0 ? enabledRuntimes[0].binary : ""
+    readonly property bool anyAvailable: Object.keys(runtimeAvailable).some(id => runtimeAvailable[id])
+
+    // Transitional: collection and actions still drive a single binary. Prefers a
+    // runtime that actually answered, so a stopped Docker does not blank the list
+    // while Podman is up. Phases 3-5 replace every use of this with real routing.
+    readonly property string primaryBinary: {
+        const rt = enabledRuntimes.find(r => runtimeAvailable[r.id]) || enabledRuntimes[0];
+        return rt ? rt.binary : "";
+    }
 
     // Settings are user-editable JSON; a half-written entry must not poison the
     // rest of the list, so every field falls back to a sane value.
@@ -93,6 +99,9 @@ Item {
 
     onRuntimesChanged: {
         eventsProcess.running = false;
+        if (!primaryBinary) {
+            return;
+        }
         eventsProcess.command = getDockerEventCommand();
         eventsProcess.running = true;
     }
@@ -137,7 +146,7 @@ Item {
         running: false
         repeat: false
         onTriggered: {
-            if (dockerAvailable) {
+            if (anyAvailable) {
                 console.log("Gantry: Attempting to restart events listener...");
                 eventsProcess.running = true;
             }
@@ -146,7 +155,7 @@ Item {
 
     property var pollingTimer: Timer {
         interval: root.pollingInterval
-        running: root.dockerAvailable && root.pollingInterval > 0
+        running: root.anyAvailable && root.pollingInterval > 0
         repeat: true
         onTriggered: {
             console.log("Gantry: Polling for container state updates");
@@ -161,19 +170,64 @@ Item {
 
         refresh();
 
-        eventsProcess.running = true;
+        if (primaryBinary) {
+            eventsProcess.running = true;
+        }
     }
 
+    // Bumped on every refresh so callbacks from a superseded round can be told
+    // apart and dropped, instead of decrementing the current round's counter.
+    property int checkGeneration: 0
+
     function refresh() {
-        Proc.runCommand(`${pluginId}.dockerCheck`, [primaryBinary, "info"], (stdout, exitCode) => {
-            root.dockerAvailable = exitCode === 0;
-            PluginService.setGlobalVar("gantry", "dockerAvailable", dockerAvailable);
-            if (dockerAvailable) {
-                fetchContainers();
-            } else {
-                updateContainers();
-            }
-        }, 100);
+        const targets = enabledRuntimes;
+        const generation = ++checkGeneration;
+        const results = {};
+        let pending = targets.length;
+
+        if (pending === 0) {
+            console.log("Gantry: no runtime enabled");
+            applyAvailability(generation, results);
+            return;
+        }
+
+        targets.forEach(rt => {
+            // Wrapped in sh -c on purpose. A binary that does not exist never
+            // starts, and Proc's callback is then never called at all -- which
+            // would leave `pending` stuck above zero and freeze collection for
+            // good. sh always exists and reports 127 instead.
+            Proc.runCommand(`${pluginId}.check.${rt.id}`, ["sh", "-c", `${rt.binary} info`], (stdout, exitCode) => {
+                if (generation !== checkGeneration) {
+                    console.log(`Gantry[${rt.id}]: stale availability check discarded`);
+                    return;
+                }
+
+                results[rt.id] = exitCode === 0;
+                console.log(`Gantry[${rt.id}]: ${exitCode === 0 ? "available" : `unavailable (exit ${exitCode})`}`);
+
+                if (--pending === 0) {
+                    applyAvailability(generation, results);
+                }
+            }, 100);
+        });
+    }
+
+    function applyAvailability(generation, results) {
+        if (generation !== checkGeneration) {
+            return;
+        }
+
+        root.runtimeAvailable = results;
+        PluginService.setGlobalVar(pluginId, "runtimeAvailable", results);
+
+        // Read from `results` rather than the anyAvailable binding, which may not
+        // have re-evaluated yet at this point.
+        if (Object.keys(results).some(id => results[id])) {
+            fetchContainers();
+        } else {
+            console.log("Gantry: no runtime available, clearing containers");
+            updateContainers();
+        }
     }
 
     function fetchContainers() {

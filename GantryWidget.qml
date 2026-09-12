@@ -9,6 +9,13 @@ PluginComponent {
 
     property var expandedContainers: ({})
     property var expandedProjects: ({})
+
+    readonly property var availableRuntimeIds: {
+        const map = globalRuntimeAvailable.value || {};
+        return Object.keys(map).filter(id => map[id]);
+    }
+    readonly property int checkedRuntimeCount: Object.keys(globalRuntimeAvailable.value || {}).length
+    readonly property bool anyRuntimeAvailable: availableRuntimeIds.length > 0
     property bool groupByCompose: pluginData.groupByCompose || false
     property bool showPorts: pluginData.showPorts ?? true
     
@@ -54,9 +61,9 @@ PluginComponent {
     }
 
     PluginGlobalVar {
-        id: globalDockerAvailable
-        varName: "dockerAvailable"
-        defaultValue: false
+        id: globalRuntimeAvailable
+        varName: "runtimeAvailable"
+        defaultValue: ({})
     }
 
     PluginGlobalVar {
@@ -370,7 +377,7 @@ PluginComponent {
         name: "docker"
         size: root.iconSize
         color: {
-            if (!globalDockerAvailable.value)
+            if (!root.anyRuntimeAvailable)
                 return Theme.error;
             if (globalRunningContainers.value > 0)
                 return Theme.primary;
@@ -895,7 +902,7 @@ PluginComponent {
                         anchors.left: parent.left
                         anchors.leftMargin: Theme.spacingM
                         anchors.verticalCenter: parent.verticalCenter
-                        text: globalDockerAvailable.value ? `${globalRunningContainers.value} running containers` : "Docker not available"
+                        text: root.anyRuntimeAvailable ? `${globalRunningContainers.value} running containers` : "No container runtime available"
                         font.pixelSize: Theme.fontSizeMedium
                         font.weight: Font.Medium
                         color: Theme.surfaceText
