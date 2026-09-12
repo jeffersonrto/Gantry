@@ -530,6 +530,38 @@ PluginComponent {
         }
     }
 
+    component StateChip: Rectangle {
+        id: stateChip
+        property string label: ""
+        property color tint: Theme.primary
+
+        implicitWidth: chipRow.implicitWidth + 16
+        implicitHeight: 22
+        radius: 999
+        color: Qt.rgba(tint.r, tint.g, tint.b, 0.18)
+
+        Row {
+            id: chipRow
+            anchors.centerIn: parent
+            spacing: 6
+
+            Rectangle {
+                width: 7
+                height: 7
+                radius: 3.5
+                color: stateChip.tint
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            StyledText {
+                text: stateChip.label
+                font.pixelSize: 11
+                color: stateChip.tint
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+    }
+
     component MetaField: Column {
         id: metaField
         property string label: ""
@@ -671,6 +703,9 @@ PluginComponent {
         id: sheetHeader
         property string title: ""
         property string subtitle: ""
+        property string badgeRuntime: ""
+        property string chipLabel: ""
+        property color chipColor: Theme.primary
 
         width: parent ? parent.width : 0
         height: 40
@@ -700,22 +735,45 @@ PluginComponent {
             }
         }
 
+        StateChip {
+            id: headerChip
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            visible: sheetHeader.chipLabel !== ""
+            label: sheetHeader.chipLabel
+            tint: sheetHeader.chipColor
+        }
+
         Column {
             anchors.left: backButton.right
             anchors.leftMargin: 12
-            anchors.right: parent.right
+            anchors.right: headerChip.visible ? headerChip.left : parent.right
+            anchors.rightMargin: headerChip.visible ? 10 : 0
             anchors.verticalCenter: parent.verticalCenter
             spacing: 1
 
-            StyledText {
-                text: sheetHeader.title
-                font.pixelSize: 15
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
-                maximumLineCount: 1
+            Row {
                 width: parent.width
+                spacing: 6
+
+                StyledText {
+                    text: sheetHeader.title
+                    font.pixelSize: 15
+                    font.weight: Font.Medium
+                    color: Theme.surfaceText
+                    elide: Text.ElideRight
+                    wrapMode: Text.NoWrap
+                    maximumLineCount: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth, parent.width - (headerBadge.visible ? headerBadge.width + 6 : 0))
+                }
+
+                RuntimeBadge {
+                    id: headerBadge
+                    runtimeId: sheetHeader.badgeRuntime
+                    visible: sheetHeader.badgeRuntime !== ""
+                    anchors.verticalCenter: parent.verticalCenter
+                }
             }
 
             StyledText {
@@ -901,12 +959,21 @@ PluginComponent {
                     visible: root.level === "container"
                     title: root.openContainer?.name || ""
                     subtitle: root.openContainer?.image || ""
+                    badgeRuntime: (root.showBadges && root.openContainer) ? root.openContainer.runtime : ""
+                    chipLabel: {
+                        const c = root.openContainer;
+                        if (!c)
+                            return "";
+                        return c.health ? `${c.state} · ${c.health}` : c.state;
+                    }
+                    chipColor: root.stateColor(root.openContainer)
                 }
 
                 SheetHeader {
                     visible: root.level === "project"
                     title: root.openProject?.name || ""
-                    subtitle: root.openProject ? `${root.openProject.runningCount}/${root.openProject.totalCount} running · ${root.openProject.runtime}` : ""
+                    subtitle: root.openProject ? `${root.openProject.runningCount}/${root.openProject.totalCount} running` : ""
+                    badgeRuntime: (root.openProject && root.projectShowsBadge(root.openProject)) ? root.openProject.runtime : ""
                 }
 
                 // ---------- partially-down banner ----------
@@ -1160,17 +1227,6 @@ PluginComponent {
                             id: containerSheet
                             width: parent.width
                             spacing: 12
-
-                            // state chip
-                            Row {
-                                spacing: 6
-
-                                ChipPill {
-                                    readonly property var container: root.openContainer
-                                    tint: root.stateColor(container)
-                                    label: container ? (container.health ? `${container.state} · ${container.health}` : container.state) : ""
-                                }
-                            }
 
                             // metadata card
                             Rectangle {
