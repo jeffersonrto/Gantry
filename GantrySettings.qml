@@ -124,7 +124,7 @@ PluginSettings {
     StringSetting {
         settingKey: "terminalApp"
         label: "Terminal Application"
-        description: "Command used to launch terminal windows for exec and logs."
+        description: "Command used to launch terminal windows for exec and logs. Gantry appends '-e <command>' itself, so do not include -e here (e.g. 'ghostty --wait-after-command', not 'ghostty --wait-after-command -e')."
         defaultValue: GantryService.defaults.terminalApp
         placeholder: GantryService.defaults.terminalApp
     }
@@ -135,19 +135,5 @@ PluginSettings {
         description: "Shell to use when executing commands in containers (note: many containers will only have /bin/sh installed.)"
         defaultValue: GantryService.defaults.shellPath
         placeholder: GantryService.defaults.shellPath
-    }
-
-    ToggleSetting {
-        settingKey: "showPorts"
-        label: "Show Port Mappings"
-        description: "Display container port mappings when expanding containers in the widget."
-        defaultValue: true
-    }
-
-    ToggleSetting {
-        settingKey: "autoScrollOnExpand"
-        label: "Auto-scroll on Expand"
-        description: "Automatically scroll to show expanded content when expanding containers or projects (smoothly follows the expansion animation)."
-        defaultValue: true
     }
 }

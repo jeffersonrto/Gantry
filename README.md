@@ -9,17 +9,21 @@ Container monitoring and management plugin for [DankMaterialShell](https://dankl
 built on [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager) and taking
 interface cues from [containerManager](https://github.com/distsystem/dms-plugins/tree/main/containerManager).
 
+Gantry watches **Docker and Podman at the same time**. Containers from both show up
+in one list, sorted by state rather than grouped by runtime, and every action is
+routed back to the runtime the container actually belongs to. If one runtime is
+down, the other keeps working.
+
 ## Features
 
-- Bar widget displaying Docker status with running container count
-- Expandable popout showing all containers
-- Docker Compose view for managing compose projects
-- Container management: start, stop, restart, pause, unpause
-- Terminal access to running containers
-- Container log viewing
-- `Port mapping display
-- Podman support with customizable docker binary
-- Auto-refresh using `docker events`
+- Watches every enabled runtime at once — one unified, sorted container list
+- Runtime badges, shown only when more than one runtime is up
+- Compose view; projects with the same name in different runtimes stay separate
+- Container detail sheet: uptime, health, restarts, ports, mounts, networks, pod
+- Start, restart, pause, unpause and stop, with the result reported back
+- Interactive shell and log tailing in your terminal
+- Per-runtime event listeners, so one runtime dying does not stop the other
+- Full keyboard navigation
 
 ## Installation
 
@@ -49,55 +53,109 @@ git clone https://github.com/jeffersonrto/Gantry ~/.config/DankMaterialShell/plu
 
 ## Requirements
 
-- Docker or Podman accessible via `docker` command
-- User permissions to run Docker commands (make sure your user is added to the `docker` or `podman` group)
+At least one container runtime, reachable from the shell's environment. Both are
+optional and independent — enable only what you use.
+
+**Docker**
+
+- The `docker` CLI on `PATH`, and a reachable daemon.
+- Your user must be able to talk to the daemon without `sudo`: either in the
+  `docker` group, or running Docker in rootless mode.
+- Check with `docker info`. If that works in a terminal, it works in Gantry.
+
+**Podman**
+
+- The `podman` CLI on `PATH`. No daemon required.
+- Nothing to configure for rootless use — it is the default.
+- Check with `podman info`.
+
+Gantry itself runs `<binary> info` for each enabled runtime on startup and marks
+anything that fails as unavailable, so a missing runtime costs you a greyed-out
+state, never an error loop.
+
+Optional: `systemd-run` (from systemd). When present, container actions are
+launched inside a transient user scope, so they survive a shell restart.
+
+### Podman rootless vs rootful
+
+They are two separate container stores. `podman ps` as your user and
+`sudo podman ps` list **different containers**, with separate images, volumes and
+networks.
+
+Gantry runs the binary as your user, so it shows the **rootless** set. Containers
+you created with `sudo podman` will not appear.
+
+There is currently no way to watch both at once: the runtime list identifies each
+entry by id, and there is no UI for adding a third entry. If you need the rootful
+set instead, point the Podman binary at a wrapper that elevates — and be aware
+that it will need to do so without an interactive password prompt.
 
 ## Configuration
 
-Settings available in plugin settings:
+Settings live in Settings -> Plugins -> Gantry.
 
-- **Docker Binary**: Path to docker or podman binary (default: `docker`)
-- **Debounce Delay**: The delay before refreshing the container list after receiving Docker Events (default: `300ms`)
-- **Background Polling Interval**: Fallback polling interval in case event-based updates aren't working reliably. 0 = disabled. (defualt: `0ms`)
-- **Terminal Application**: Command for terminal windows (default: `alacritty --hold`)
-- **Shell Path**: Shell for container exec (default: `/bin/sh`)
-- **Show Port Mappings**: Toggle display of container port mappings when expanding containers (default: `true`)
-- **Auto-scroll on Expand**: Automatically scroll to show expanded content when expanding containers or projects. The scroll smoothly follows the expansion animation to keep the action buttons visible. (default: `true`)
+### Container runtimes
+
+The main setting is a list, one row per runtime, each with a toggle and a binary
+path:
+
+| Runtime | Enabled by default | Binary |
+| --- | --- | --- |
+| Docker | yes | `docker` |
+| Podman | yes | `podman` |
+
+- **Toggle** — whether Gantry watches that runtime at all. A disabled runtime is
+  never queried, never listed, and refuses any action aimed at it.
+- **Binary** — the command to run. A bare name is resolved on `PATH`; an absolute
+  path works too, which is how you point at a non-standard install or a wrapper.
+
+Turn off what you do not use. With a single runtime enabled, the runtime badges
+disappear from the list — they would be noise.
+
+### Other settings
+
+- **Debounce Delay** — how long to wait after a container event before refreshing,
+  so a burst of changes causes one refresh instead of many (default: `300ms`).
+- **Background Polling Interval** — fallback refresh for when event-based updates
+  are unreliable. `0` disables it (default: `0ms`).
+- **Terminal Application** — command used to open a terminal for shell and logs
+  (default: `alacritty --hold`). Gantry appends `-e <command>` itself, so leave
+  `-e` out of this setting. Examples: `alacritty --hold`,
+  `ghostty --wait-after-command`, `kitty --hold`, `foot --hold`.
+- **Shell Path** — shell to run inside containers. Many images only ship
+  `/bin/sh` (default: `/bin/sh`).
 
 ## Usage
 
-Bar widget shows:
-- Docker icon (colored: running containers, no color: no containers, red: unavailable)
-- Running container count
+The bar shows the plugin icon and the number of running containers across every
+enabled runtime. With nothing running, or no runtime available, the icon dims and
+the count disappears.
 
-Click widget to open container list. Expand containers to access actions:
-- Start/Restart containers
-- Pause/Unpause running containers
-- Stop containers
-- Open interactive shell
-- View logs
+Clicking it opens a popup with three levels:
 
-If you have a Docker Compose project, you can select in the widget to manage the Compose projects instead, using the selector on the top-right.
+1. **Containers** or **Compose**, chosen with the toggle at the top.
+2. A **project sheet**, from the Compose list: project-wide actions plus its
+   services.
+3. A **container sheet**, from either list: state, metadata and per-container
+   actions.
+
+Actions offered depend on the container's state — a stopped container has no
+Stop, a container that is not running has no Shell. Results arrive as a toast at
+the bottom of the popup; on failure it carries the runtime's own message.
+
+When one runtime is down and another is up, a banner names the missing one and
+the list carries on with what is left. When none respond, the popup says so.
 
 ### Keyboard Navigation
 
-Gantry supports keyboard navigation when the popout is open:
-
-**Basic Navigation:**
-- `Up/Down` or `Ctrl+K/J` or `Ctrl+P/N` or `Tab/Shift+Tab` - Navigate between items
-  - In **Container View**: Navigate through all containers
-  - In **Compose View**: Navigate through projects and their nested containers hierarchically
-- `Enter` or `Space` - Expand/collapse the selected container/project, or execute the selected action when in action menu
-- `Left Arrow` or `Ctrl+H` - Collapse the selected container/project when in main list
-
-**Action Menu Navigation:**
-- `Right Arrow` or `Ctrl+L` - Enter action menu for the currently selected container/project (expands first if collapsed)
-- `Up/Down` - Navigate between action buttons when inside action menu
-- `Left Arrow` or `Ctrl+H` - Exit action menu and return to main list
-- `Enter` or `Space` - Execute the currently selected action
-
-**View Mode:**
-- `V` - Toggle between Container view and Compose Project view
+| Key | Action |
+| --- | --- |
+| `↑` `↓`, `Ctrl+K/J`, `Ctrl+P/N` | Move through the current list |
+| `→` or `Enter` | Open the selected item |
+| `←` | Go back one level |
+| `Tab` | In a project sheet, switch between actions and services |
+| `V` | Switch between Containers and Compose (top level only) |
+| `Esc` | Close the popup |
 
 ## Credits
 

@@ -2,10 +2,12 @@
     "id": "gantry",
     "name": "Gantry",
     "description": "Multi-runtime container monitoring and management for Docker and Podman",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "author": "LuckShiba, jeff",
     "type": "widget",
-    "capabilities": ["dankbar-widget"],
+    "capabilities": [
+        "dankbar-widget"
+    ],
     "component": "./GantryWidget.qml",
     "icon": "deployed_code",
     "settings": "./GantrySettings.qml",
