@@ -93,19 +93,12 @@ Item {
         }
     }
 
-    function getDockerEventCommand() {
-        return [primaryBinary, "events", "--format", "json", "--filter", "type=container"];
+    function eventCommandFor(rt) {
+        return [rt.binary, "events", "--format", "json", "--filter", "type=container"];
     }
 
-    onRuntimesChanged: {
-        eventsProcess.running = false;
-        if (!primaryBinary) {
-            return;
-        }
-        eventsProcess.command = getDockerEventCommand();
-        eventsProcess.running = true;
-    }
-
+    // Single and global on purpose: an event from any runtime schedules one full
+    // refresh, rather than each listener refreshing on its own.
     property var debounceTimer: Timer {
         interval: root.debounceDelay
         running: false
@@ -113,42 +106,55 @@ Item {
         onTriggered: fetchContainers()
     }
 
-    property var eventsProcess: Process {
-        command: getDockerEventCommand()
-        running: false
+    // One listener per enabled runtime. The Instantiator rebuilds them whenever
+    // the runtime list changes, and each delegate owns its restart timer, so a
+    // Podman that keeps dying cannot take the Docker listener down with it.
+    property var eventListeners: Instantiator {
+        model: root.enabledRuntimes
 
-        stdout: SplitParser {
-            onRead: data => {
-                try {
-                    const event = JSON.parse(data);
-                    const action = event.Status || event.status;
+        delegate: QtObject {
+            id: listener
 
-                    if (["start", "stop", "die", "died", "kill", "restart", "pause", "unpause", "create", "destroy", "remove", "cleanup"].includes(action)) {
-                        console.log(`Gantry: Container event detected - ${action}`);
-                        debounceTimer.restart();
+            required property var modelData
+
+            readonly property var eventsProcess: Process {
+                command: root.eventCommandFor(listener.modelData)
+                running: true
+
+                stdout: SplitParser {
+                    onRead: data => {
+                        try {
+                            const event = JSON.parse(data);
+                            const action = event.Status || event.status;
+
+                            if (["start", "stop", "die", "died", "kill", "restart", "pause", "unpause", "create", "destroy", "remove", "cleanup"].includes(action)) {
+                                console.log(`Gantry[${listener.modelData.id}]: container event - ${action}`);
+                                root.debounceTimer.restart();
+                            }
+                        } catch (e) {
+                            console.error(`Gantry[${listener.modelData.id}]: failed to parse event:`, e, data);
+                        }
                     }
-                } catch (e) {
-                    console.error("Gantry: Failed to parse docker event:", e, data);
+                }
+
+                onRunningChanged: {
+                    if (!running) {
+                        console.log(`Gantry[${listener.modelData.id}]: events listener stopped`);
+                        listener.restartTimer.start();
+                    }
                 }
             }
-        }
 
-        onRunningChanged: {
-            if (!running) {
-                console.log("Gantry: Docker events process not running");
-                restartTimer.start();
-            }
-        }
-    }
-
-    property var restartTimer: Timer {
-        interval: 5000
-        running: false
-        repeat: false
-        onTriggered: {
-            if (anyAvailable) {
-                console.log("Gantry: Attempting to restart events listener...");
-                eventsProcess.running = true;
+            readonly property var restartTimer: Timer {
+                interval: 5000
+                running: false
+                repeat: false
+                onTriggered: {
+                    if (root.runtimeAvailable[listener.modelData.id]) {
+                        console.log(`Gantry[${listener.modelData.id}]: restarting events listener`);
+                        listener.eventsProcess.running = true;
+                    }
+                }
             }
         }
     }
@@ -169,10 +175,6 @@ Item {
         }, 100);
 
         refresh();
-
-        if (primaryBinary) {
-            eventsProcess.running = true;
-        }
     }
 
     // Bumped on every refresh so callbacks from a superseded round can be told
