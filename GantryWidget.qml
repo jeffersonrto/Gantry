@@ -460,6 +460,21 @@ PluginComponent {
             root.runContainerAction(root.openContainer, action.id);
     }
 
+    // Keyboard selection has to drag the viewport along. ListView does not scroll
+    // to currentIndex on its own with the default highlightRangeMode, and a
+    // Flickable never does -- without this, selecting past the visible rows
+    // navigates blind.
+    function ensureItemVisible(flickable, item) {
+        if (!flickable || !item)
+            return;
+        const top = item.mapToItem(flickable.contentItem, 0, 0).y;
+        const bottom = top + item.height;
+        if (top < flickable.contentY)
+            flickable.contentY = top;
+        else if (bottom > flickable.contentY + flickable.height)
+            flickable.contentY = bottom - flickable.height;
+    }
+
     function switchSheetSection() {
         if (root.level !== "project" || root.sheetServices.length === 0)
             return;
@@ -949,6 +964,14 @@ PluginComponent {
                     DankListView {
                         id: containerListView
                         anchors.fill: parent
+
+                        Connections {
+                            target: root
+                            function onSelectedIndexChanged() {
+                                if (root.keyboardActive && containerListView.visible)
+                                    Qt.callLater(() => containerListView.positionViewAtIndex(root.selectedIndex, ListView.Contain));
+                            }
+                        }
                         visible: root.anyRuntimeAvailable && root.level === "root" && !root.groupByCompose && root.rootList.length > 0
                         spacing: 2
                         clip: true
@@ -1032,6 +1055,14 @@ PluginComponent {
                     DankListView {
                         id: projectListView
                         anchors.fill: parent
+
+                        Connections {
+                            target: root
+                            function onSelectedIndexChanged() {
+                                if (root.keyboardActive && projectListView.visible)
+                                    Qt.callLater(() => projectListView.positionViewAtIndex(root.selectedIndex, ListView.Contain));
+                            }
+                        }
                         visible: root.anyRuntimeAvailable && root.level === "root" && root.groupByCompose && root.rootList.length > 0
                         spacing: 2
                         clip: true
@@ -1118,6 +1149,7 @@ PluginComponent {
 
                     // ---------- container sheet ----------
                     Flickable {
+                        id: containerSheetFlick
                         anchors.fill: parent
                         visible: root.level === "container" && root.openContainer !== null
                         contentHeight: containerSheet.height
@@ -1305,6 +1337,7 @@ PluginComponent {
                                     model: root.sheetActions
 
                                     ActionRow {
+                                        id: containerActionRow
                                         required property var modelData
                                         required property int index
                                         label: modelData.label
@@ -1313,6 +1346,10 @@ PluginComponent {
                                         blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
                                         isSelected: root.keyboardActive && root.selectedIndex === index
                                         onActivated: root.runContainerAction(root.openContainer, modelData.id)
+                                        onIsSelectedChanged: {
+                                            if (isSelected)
+                                                root.ensureItemVisible(containerSheetFlick, containerActionRow);
+                                        }
                                     }
                                 }
                             }
@@ -1321,6 +1358,7 @@ PluginComponent {
 
                     // ---------- project sheet ----------
                     Flickable {
+                        id: projectSheetFlick
                         anchors.fill: parent
                         visible: root.level === "project" && root.openProject !== null
                         contentHeight: projectSheet.height
@@ -1340,6 +1378,7 @@ PluginComponent {
                                     model: root.sheetActions
 
                                     ActionRow {
+                                        id: projectActionRow
                                         required property var modelData
                                         required property int index
                                         label: modelData.label
@@ -1348,6 +1387,10 @@ PluginComponent {
                                         blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
                                         isSelected: root.keyboardActive && root.sheetSection === "actions" && root.selectedIndex === index
                                         onActivated: root.runProjectAction(root.openProject, modelData.id)
+                                        onIsSelectedChanged: {
+                                            if (isSelected)
+                                                root.ensureItemVisible(projectSheetFlick, projectActionRow);
+                                        }
                                     }
                                 }
                             }
@@ -1380,6 +1423,10 @@ PluginComponent {
                                         isSelected: root.keyboardActive && root.sheetSection === "services" && root.selectedIndex === index
                                         opacity: (modelData.isRunning || modelData.isPaused) ? 1 : 0.6
                                         onActivated: root.openContainerSheet(modelData, root.openProjectKey)
+                                        onIsSelectedChanged: {
+                                            if (isSelected)
+                                                root.ensureItemVisible(projectSheetFlick, serviceRow);
+                                        }
 
                                         Rectangle {
                                             id: serviceDot
