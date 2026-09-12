@@ -302,6 +302,12 @@ Item {
                 // Podman omits the leading slash on Name, Docker keeps it.
                 const name = container.Name?.replace(/^\//, "") || "";
 
+                const mounts = (container.Mounts || []).map(m => ({
+                            type: m.Type || "",
+                            source: m.Name || m.Source || "",
+                            destination: m.Destination || ""
+                        })).filter(m => m.destination);
+
                 return {
                     runtime: rt.id,
                     id: container.Id || "",
@@ -316,6 +322,13 @@ Item {
                     isPaused: container.State?.Paused || false,
                     created: container.Created || "",
                     lastActivity: lastActivity,
+                    startedAt: startedAt,
+                    exitCode: container.State?.ExitCode ?? 0,
+                    health: container.State?.Health?.Status || "",
+                    restartCount: container.RestartCount || 0,
+                    pod: container.Pod || "",
+                    mounts: mounts,
+                    networks: Object.keys(container.NetworkSettings?.Networks || {}),
                     ports: ports,
                     composeProject: labels["com.docker.compose.project"] || labels["io.podman.compose.project"] || "",
                     composeService: labels["com.docker.compose.service"] || labels["io.podman.compose.service"] || "",
@@ -415,7 +428,32 @@ Item {
         return rt.binary;
     }
 
-    function executeAction(runtimeId, containerId, action) {
+    function shellQuote(value) {
+        return `'${String(value).replace(/'/g, "'\\''")}'`;
+    }
+
+    // Actions run through Proc rather than execDetached so the caller learns the
+    // exit code and the runtime's own message. stderr is folded into stdout
+    // because Proc only hands the callback stdout. systemd-run --user --scope
+    // still moves the work into its own unit, so it outlives the shell, and
+    // systemd-run reports the command's exit status back.
+    function runAction(id, argv, onDone) {
+        const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...argv] : argv;
+        const line = `${wrapped.map(shellQuote).join(" ")} 2>&1`;
+
+        Proc.runCommand(id, ["sh", "-c", line], (output, exitCode) => {
+            const message = String(output || "").trim();
+            if (exitCode !== 0) {
+                console.error(`Gantry: command failed (exit ${exitCode}): ${message}`);
+            }
+            root.refresh();
+            if (onDone) {
+                onDone(exitCode === 0, message);
+            }
+        }, 0, 60000);
+    }
+
+    function executeAction(runtimeId, containerId, action, onDone) {
         const binary = binaryFor(runtimeId, `action '${action}'`);
         if (!binary) {
             return false;
@@ -430,18 +468,14 @@ Item {
         };
 
         if (commands[action]) {
-            const cmdArray = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...commands[action]] : commands[action];
             console.log(`Gantry[${runtimeId}]: ${action} ${containerId}`);
-            Quickshell.execDetached(cmdArray);
-            Qt.callLater(() => {
-                root.refresh();
-            });
+            runAction(`${pluginId}.action.${runtimeId}.${containerId}`, commands[action], onDone);
             return true;
         }
         return false;
     }
 
-    function executeComposeAction(runtimeId, workingDir, configFile, action) {
+    function executeComposeAction(runtimeId, workingDir, configFile, action, onDone) {
         const binary = binaryFor(runtimeId, `compose action '${action}'`);
         if (!binary) {
             return false;
@@ -470,13 +504,8 @@ Item {
         }
 
         if (composeCommands[action]) {
-            const cmd = ["sh", "-c", `cd "${workingDir}" && ${composeCommands[action].join(" ")}`];
-            const cmdArray = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...cmd] : cmd;
             console.log(`Gantry[${runtimeId}]: compose ${action} in ${workingDir}`);
-            Quickshell.execDetached(cmdArray);
-            Qt.callLater(() => {
-                root.refresh();
-            });
+            runAction(`${pluginId}.compose.${runtimeId}.${workingDir}`, ["sh", "-c", `cd ${shellQuote(workingDir)} && ${composeCommands[action].join(" ")}`], onDone);
             return true;
         }
         return false;

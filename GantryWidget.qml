@@ -7,58 +7,29 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
-    property var expandedContainers: ({})
-    property var expandedProjects: ({})
-
-    readonly property var availableRuntimeIds: {
-        const map = globalRuntimeAvailable.value || {};
-        return Object.keys(map).filter(id => map[id]);
-    }
-    readonly property int checkedRuntimeCount: Object.keys(globalRuntimeAvailable.value || {}).length
-    readonly property bool anyRuntimeAvailable: availableRuntimeIds.length > 0
+    // ------------------------------------------------------------------
+    // Navigation state
+    //
+    // Three levels, one at a time: the sheet replaces the list rather than
+    // stacking on top of it. Container sheets are reachable from both the
+    // container list and a project sheet, so `level` alone is not enough to
+    // know where Back should return to -- openProjectKey carries that.
+    // ------------------------------------------------------------------
     property bool groupByCompose: pluginData.groupByCompose || false
-    property bool showPorts: pluginData.showPorts ?? true
-    
-    property bool autoScrollOnExpand: pluginData.autoScrollOnExpand ?? true
-    property string selectedItemId: ""
-    property bool selectedIsContainer: false
-    property string selectedParentProject: ""
-    property int selectedActionIndex: -1
-    property bool keyboardNavigationActive: false
-    property var containerListView: null
-    property var projectListView: null
-    property var currentActionsList: null
-    
-    Timer {
-        id: scrollTimer
-        interval: 16
-        repeat: true
-        property int iterations: 0
-        property int maxIterations: Math.ceil((Theme.expressiveDurations["expressiveFastSpatial"] ?? 300) / interval) + 1
-        onTriggered: {
-            if (++iterations >= maxIterations) {
-                stop();
-                iterations = 0;
-            }
-            ensureVisible();
-        }
-        function restart() {
-            iterations = 0;
-            maxIterations = Math.ceil((Theme.expressiveDurations["expressiveFastSpatial"] ?? 300) / interval);
-            start();
-        }
-    }
+    property string level: "root"
+    property string openProjectKey: ""
+    property string openContainerKey: ""
+    property string sheetSection: "actions"
+    property int selectedIndex: 0
+    property bool keyboardActive: false
 
-    onExpandedProjectsChanged: {
-        if (keyboardNavigationActive && root.groupByCompose) {
-            ensureValidSelection();
-        }
-    }
+    property string pendingAction: ""
 
-    Component.onCompleted: {
-        // Note: the import of GantryService here is necessary because Singletons are lazy-loaded in QML.
-        console.log(GantryService.pluginId, "loaded.");
-    }
+    property string toastKind: ""
+    property string toastTitle: ""
+    property string toastDetail: ""
+
+    property int nowTick: 0
 
     PluginGlobalVar {
         id: globalRuntimeAvailable
@@ -82,1156 +53,549 @@ PluginComponent {
         id: globalComposeProjects
         varName: "composeProjects"
         defaultValue: []
-        onValueChanged: {
-            if (globalComposeProjects.value.length === 0 && root.groupByCompose) {
-                root.groupByCompose = false;
-                root.pluginService?.savePluginData("gantry", "groupByCompose", false);
+    }
+
+    readonly property var availableRuntimeIds: {
+        const map = globalRuntimeAvailable.value || {};
+        return Object.keys(map).filter(id => map[id]);
+    }
+    readonly property int checkedRuntimeCount: Object.keys(globalRuntimeAvailable.value || {}).length
+    readonly property bool anyRuntimeAvailable: availableRuntimeIds.length > 0
+    readonly property bool partiallyDown: anyRuntimeAvailable && availableRuntimeIds.length < checkedRuntimeCount
+    readonly property var downRuntimeIds: {
+        const map = globalRuntimeAvailable.value || {};
+        return Object.keys(map).filter(id => !map[id]);
+    }
+
+    // A badge only earns its place when it tells items apart.
+    readonly property bool showBadges: checkedRuntimeCount > 1 && availableRuntimeIds.length > 1
+
+    readonly property var rootList: groupByCompose ? globalComposeProjects.value : globalContainers.value
+
+    readonly property var openProject: {
+        if (!openProjectKey)
+            return null;
+        return globalComposeProjects.value.find(p => p.key === openProjectKey) || null;
+    }
+
+    readonly property var openContainer: {
+        if (!openContainerKey)
+            return null;
+        return globalContainers.value.find(c => c.key === openContainerKey) || null;
+    }
+
+    readonly property var sheetActions: {
+        if (level === "container")
+            return openContainer ? containerActions(openContainer) : [];
+        if (level === "project")
+            return openProject ? projectActions(openProject) : [];
+        return [];
+    }
+
+    readonly property var sheetServices: (level === "project" && openProject) ? openProject.containers : []
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+    function stateColor(container) {
+        if (!container)
+            return Theme.surfaceVariantText;
+        if (container.health === "unhealthy")
+            return Theme.error;
+        if (container.isPaused)
+            return Theme.warning;
+        if (container.isRunning)
+            return Theme.primary;
+        return Theme.surfaceVariantText;
+    }
+
+    function runtimeTint(runtimeId) {
+        return runtimeId === "podman" ? Theme.warning : Theme.primary;
+    }
+
+    // Shown instead of the image for anything that is not running.
+    function secondaryText(container) {
+        if (!container)
+            return "";
+        if (container.isPaused)
+            return "paused";
+        if (container.isRunning)
+            return container.image;
+        if (container.state === "created")
+            return "created";
+        return `${container.state || "exited"} (${container.exitCode})`;
+    }
+
+    function formatUptime(startedAt) {
+        const seconds = Math.floor((Date.now() - startedAt) / 1000);
+        if (!startedAt || seconds < 0 || !isFinite(seconds))
+            return "";
+
+        const units = [
+            {
+                label: "d",
+                size: 86400
+            },
+            {
+                label: "h",
+                size: 3600
+            },
+            {
+                label: "m",
+                size: 60
+            },
+            {
+                label: "s",
+                size: 1
             }
+        ];
+
+        const parts = [];
+        let rest = seconds;
+        for (const unit of units) {
+            const value = Math.floor(rest / unit.size);
+            if (value > 0 || parts.length > 0) {
+                if (value > 0)
+                    parts.push(`${value}${unit.label}`);
+                if (parts.length === 2)
+                    break;
+            }
+            rest = rest % unit.size;
         }
+        return parts.length > 0 ? parts.join(" ") : "0s";
     }
 
-    function toggleContainer(containerId, parentProject) {
-        const wasExpanded = root.expandedContainers[containerId] || false;
-        const expanded = root.expandedContainers;
-        expanded[containerId] = !expanded[containerId];
-        root.expandedContainers = expanded;
-        root.expandedContainersChanged();
-        
-        if (!wasExpanded && !keyboardNavigationActive && autoScrollOnExpand) {
-            selectedItemId = containerId;
-            selectedIsContainer = true;
-            selectedParentProject = parentProject || "";
-            scrollTimer.restart();
-        }
-    }
-
-    function toggleProject(projectKey) {
-        const wasExpanded = root.expandedProjects[projectKey] || false;
-        const expanded = root.expandedProjects;
-        expanded[projectKey] = !expanded[projectKey];
-        root.expandedProjects = expanded;
-        root.expandedProjectsChanged();
-        
-        if (!wasExpanded && !keyboardNavigationActive && autoScrollOnExpand) {
-            selectedItemId = projectKey;
-            selectedIsContainer = false;
-            selectedParentProject = "";
-            scrollTimer.restart();
-        }
-    }
-
-    // Every action is routed by the container's own runtime. The service refuses
-    // and returns false when that runtime is unknown or disabled, so a failure is
-    // surfaced instead of being retried against the wrong binary.
-    function executeAction(container, action) {
-        if (GantryService.executeAction(container.runtime, container.id || container.name, action)) {
-            ToastService.showInfo("Executing " + action + " on container");
-        } else {
-            ToastService.showError("Could not run " + action + " on " + container.name);
-        }
-    }
-
-    function executeComposeAction(project, action) {
-        if (GantryService.executeComposeAction(project.runtime, project.workingDir, project.configFile, action)) {
-            ToastService.showInfo("Executing " + action + " on project");
-        } else {
-            ToastService.showError("Could not run " + action + " on " + project.name);
-        }
-    }
-
-    function openLogs(container) {
-        if (!GantryService.openLogs(container.runtime, container.id || container.name)) {
-            ToastService.showError("Could not open logs for " + container.name);
-        }
-    }
-
-    function openExec(container) {
-        if (!GantryService.openExec(container.runtime, container.id || container.name)) {
-            ToastService.showError("Could not open a shell in " + container.name);
-        }
-    }
-
-    function buildNavigableList() {
-        if (!groupByCompose) {
-            return globalContainers.value.map(c => ({type: 'container', id: c.id, data: c}));
-        }
-        
+    function containerActions(container) {
         const list = [];
-        globalComposeProjects.value.forEach(project => {
-            list.push({type: 'project', id: project.key, data: project});
-            if (expandedProjects[project.key]) {
-                project.containers.forEach(container => {
-                    list.push({
-                        type: 'container', 
-                        id: container.key, 
-                        data: container, 
-                        parentProject: project.key
-                    });
-                });
-            }
+        if (container.isRunning)
+            list.push({
+                id: "restart",
+                label: "Restart",
+                icon: "refresh"
+            });
+        else
+            list.push({
+                id: "start",
+                label: "Start",
+                icon: "play_arrow"
+            });
+
+        if (container.isPaused)
+            list.push({
+                id: "unpause",
+                label: "Unpause",
+                icon: "play_arrow"
+            });
+        else if (container.isRunning)
+            list.push({
+                id: "pause",
+                label: "Pause",
+                icon: "pause"
+            });
+
+        if (container.isRunning || container.isPaused)
+            list.push({
+                id: "stop",
+                label: "Stop",
+                icon: "stop"
+            });
+
+        if (container.isRunning)
+            list.push({
+                id: "shell",
+                label: "Shell",
+                icon: "terminal"
+            });
+
+        list.push({
+            id: "logs",
+            label: "Logs",
+            icon: "description"
         });
         return list;
     }
 
-    function findItemIndexById(itemId) {
-        return buildNavigableList().findIndex(item => item.id === itemId);
-    }
-
-    function getSelectedIndex() {
-        return selectedItemId ? findItemIndexById(selectedItemId) : -1;
-    }
-
-    function ensureValidSelection() {
-        const list = buildNavigableList();
-        if (!list.length) {
-            selectedItemId = "";
-            selectedIsContainer = false;
-            selectedParentProject = "";
-            return;
-        }
-
-        if (!selectedItemId || findItemIndexById(selectedItemId) === -1) {
-            const first = list[0];
-            selectedItemId = first.id;
-            selectedIsContainer = first.type === 'container';
-            selectedParentProject = first.parentProject || "";
-        }
-    }
-
-    function isActionEnabled(actionIndex) {
-        const list = buildNavigableList();
-        const idx = getSelectedIndex();
-        if (idx < 0 || idx >= list.length) return false;
-        
-        const data = list[idx].data;
-        if (selectedIsContainer) {
-            switch(actionIndex) {
-                case 0: return !data.isPaused;
-                case 1: return data.isRunning || data.isPaused;
-                case 2: return data.isRunning || data.isPaused;
-                case 3: return data.isRunning;
-                case 4: return true;
-            }
-        } else {
-            switch(actionIndex) {
-                case 0: return data.runningCount < data.totalCount;
-                case 1: return data.runningCount > 0;
-                case 2: return data.runningCount > 0;
-                case 3: return true;
-            }
-        }
-        return false;
-    }
-
-    function findNextEnabledAction(fromIndex) {
-        const maxActions = selectedIsContainer ? 4 : 3;
-        for (let i = fromIndex + 1; i <= maxActions; i++) {
-            if (isActionEnabled(i)) return i;
-        }
-        return -1;
-    }
-
-    function findPreviousEnabledAction(fromIndex) {
-        for (let i = fromIndex - 1; i >= 0; i--) {
-            if (isActionEnabled(i)) return i;
-        }
-        return -1;
-    }
-
-    function selectNext() {
-        const list = buildNavigableList();
-        if (!list.length) return;
-        
-        if (!keyboardNavigationActive) {
-            keyboardNavigationActive = true;
-            ensureValidSelection();
-            return;
-        }
-        
-        if (selectedActionIndex >= 0) {
-            const nextAction = findNextEnabledAction(selectedActionIndex);
-            if (nextAction >= 0) {
-                selectedActionIndex = nextAction;
-                return;
-            }
-            selectedActionIndex = -1;
-        }
-        
-        const currentIndex = getSelectedIndex();
-        if (currentIndex >= list.length - 1) return;
-        
-        const nextItem = list[currentIndex + 1];
-        selectedItemId = nextItem.id;
-        selectedIsContainer = nextItem.type === 'container';
-        selectedParentProject = nextItem.parentProject || "";
-        ensureVisible();
-    }
-
-    function selectPrevious() {
-        const list = buildNavigableList();
-        if (!list.length) return;
-        
-        if (!keyboardNavigationActive) {
-            keyboardNavigationActive = true;
-            ensureValidSelection();
-            return;
-        }
-        
-        if (selectedActionIndex >= 0) {
-            const prevAction = findPreviousEnabledAction(selectedActionIndex);
-            if (prevAction >= 0) {
-                selectedActionIndex = prevAction;
-                return;
-            }
-            selectedActionIndex = -1;
-            ensureVisible();
-            return;
-        }
-        
-        const currentIndex = getSelectedIndex();
-        if (currentIndex <= 0) return;
-        
-        const prevItem = list[currentIndex - 1];
-        selectedItemId = prevItem.id;
-        selectedIsContainer = prevItem.type === 'container';
-        selectedParentProject = prevItem.parentProject || "";
-        ensureVisible();
-    }
-
-    function getExpandedState(itemId) {
-        return selectedIsContainer ? (expandedContainers[itemId] || false) : (expandedProjects[itemId] || false);
-    }
-
-    function toggleItem() {
-        selectedIsContainer ? toggleContainer(selectedItemId, selectedParentProject) : toggleProject(selectedItemId);
-    }
-
-    function toggleSelected() {
-        if (!selectedItemId) return;
-        
-        if (selectedActionIndex >= 0 && currentActionsList) {
-            const actionButton = currentActionsList[selectedActionIndex];
-            if (actionButton?.enabled) actionButton.triggered();
-            return;
-        }
-        
-        const wasExpanded = getExpandedState(selectedItemId);
-        toggleItem();
-        !wasExpanded && autoScrollOnExpand ? scrollTimer.restart() : Qt.callLater(ensureVisible);
-    }
-    
-    function ensureVisible() {
-        if (!selectedItemId) return;
-        
-        const listView = groupByCompose ? projectListView : containerListView;
-        if (!listView) return;
-        
-        Qt.callLater(() => {
-            const index = groupByCompose ? getSelectedProjectIndex() : getSelectedIndex();
-            if (index >= 0) {
-                // For nested containers that are expanded, position at end to keep them visible
-                if (groupByCompose && selectedIsContainer && getExpandedState(selectedItemId)) {
-                    listView.positionViewAtIndex(index, ListView.End);
-                } else {
-                    listView.positionViewAtIndex(index, ListView.Contain);
-                }
-            }
-        });
-    }
-    
-    function enterActions() {
-        if (!selectedItemId || selectedActionIndex >= 0) return;
-        if (!getExpandedState(selectedItemId)) toggleSelected();
-        selectedActionIndex = findNextEnabledAction(-1);
-        if (selectedActionIndex < 0) selectedActionIndex = 0;
-        ensureVisible();
-    }
-    
-    function exitActions() {
-        if (selectedActionIndex >= 0) {
-            selectedActionIndex = -1;
-            ensureVisible();
-            return;
-        }
-        
-        if (getExpandedState(selectedItemId)) {
-            toggleItem();
-            return;
-        }
-        
-        if (groupByCompose && selectedIsContainer && selectedParentProject) {
-            selectedItemId = selectedParentProject;
-            selectedIsContainer = false;
-            selectedParentProject = "";
-            ensureVisible();
-        }
-    }
-    
-    function toggleViewMode() {
-        groupByCompose = !groupByCompose;
-        pluginService?.savePluginData("gantry", "groupByCompose", groupByCompose);
-        selectedItemId = "";
-        selectedIsContainer = false;
-        selectedParentProject = "";
-        selectedActionIndex = -1;
-        ensureValidSelection();
-    }
-    
-    function getSelectedProjectIndex() {
-        if (!groupByCompose || !selectedItemId) return -1;
-        
-        const projectKey = selectedIsContainer ? selectedParentProject : selectedItemId;
-        return globalComposeProjects.value.findIndex(p => p.key === projectKey);
-    }
-
-    component RuntimeIcon: DankNFIcon {
-        name: "docker"
-        size: root.iconSize
-        color: {
-            if (!root.anyRuntimeAvailable)
-                return Theme.error;
-            if (globalRunningContainers.value > 0)
-                return Theme.primary;
-            return Theme.widgetIconColor || Theme.surfaceText;
-        }
-    }
-
-    component RuntimeCount: StyledText {
-        text: globalRunningContainers.value.toString()
-        font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
-        color: Theme.widgetTextColor || Theme.surfaceText
-        visible: globalRunningContainers.value > 0
-    }
-
-    component ProjectHeader: StyledRect {
-        id: projectHeader
-        property string projectName: ""
-        property int runningCount: 0
-        property int totalCount: 0
-        property int serviceCount: 0
-        property bool isExpanded: false
-        property bool isCurrentItem: false
-        signal clicked
-
-        width: parent.width
-        height: 52
-        radius: Theme.cornerRadius
-        color: (isCurrentItem || projectMouse.containsMouse) ? Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency) : Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
-        border.width: Theme.layerOutlineWidth
-        border.color: Theme.outlineLight
-
-        DankIcon {
-            name: "account_tree"
-            size: Theme.iconSize + 2
-            color: {
-                if (projectHeader.runningCount === projectHeader.totalCount && projectHeader.totalCount > 0)
-                    return Theme.primary;
-                if (projectHeader.runningCount > 0)
-                    return Theme.warning;
-                return Theme.surfaceText;
-            }
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.spacingM
-            anchors.verticalCenter: parent.verticalCenter
-        }
-
-        Column {
-            anchors.left: parent.left
-            anchors.leftMargin: Theme.spacingM * 2 + Theme.iconSize + 2
-            anchors.right: parent.right
-            anchors.rightMargin: Theme.spacingM * 2 + Theme.iconSize
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 3
-
-            StyledText {
-                text: projectHeader.projectName
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Bold
-                color: Theme.surfaceText
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
-                width: parent.width
-            }
-
-            Row {
-                spacing: Theme.spacingS
-
-                StyledText {
-                    text: `${projectHeader.runningCount}/${projectHeader.totalCount} running`
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                }
-
-                StyledText {
-                    text: "•"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    visible: projectHeader.serviceCount > 0
-                }
-
-                StyledText {
-                    text: `${projectHeader.serviceCount} service${projectHeader.serviceCount !== 1 ? 's' : ''}`
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
-                    visible: projectHeader.serviceCount > 0
-                }
-            }
-        }
-
-        DankIcon {
-            name: isExpanded ? "expand_less" : "expand_more"
-            size: Theme.iconSize
-            color: Theme.surfaceText
-            anchors.right: parent.right
-            anchors.rightMargin: Theme.spacingM
-            anchors.verticalCenter: parent.verticalCenter
-        }
-
-        MouseArea {
-            id: projectMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                root.keyboardNavigationActive = false;
-                projectHeader.clicked();
-            }
-        }
-    }
-
-    component ContainerHeader: StyledRect {
-        id: containerHeader
-        property var containerData: null
-        property bool useComposeServiceName: false
-        property bool isExpanded: false
-        property bool isCurrentItem: false
-        property real leftIndent: Theme.spacingM
-        property real iconSize: Theme.iconSize
-        property real baseHeight: 48
-        property color defaultColor: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
-        property color hoverColor: Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency)
-        signal clicked
-
-        width: parent.width
-        height: baseHeight + (isExpanded && root.showPorts && containerData?.ports?.length > 0 ? Theme.spacingS + portFlow.height + Theme.spacingXS : 0)
-        radius: Theme.cornerRadius
-        color: isCurrentItem ? hoverColor : (headerMouse.containsMouse ? hoverColor : defaultColor)
-        border.width: Theme.layerOutlineWidth
-        border.color: Theme.outlineLight
-
-        Behavior on height {
-            NumberAnimation {
-                duration: Theme.expressiveDurations["expressiveFastSpatial"]
-                easing.type: Theme.standardEasing
-            }
-        }
-
-        DankIcon {
-            id: containerIcon
-            name: "deployed_code"
-            size: containerHeader.iconSize
-            color: {
-                if (containerData?.isPaused)
-                    return Theme.warning;
-                if (containerData?.isRunning)
-                    return Theme.primary;
-                return Theme.surfaceText;
-            }
-            anchors.left: parent.left
-            anchors.leftMargin: containerHeader.leftIndent
-            anchors.top: parent.top
-            anchors.topMargin: (containerHeader.baseHeight - containerIcon.height) / 2
-        }
-
-        Column {
-            id: headerTextColumn
-            anchors.left: parent.left
-            anchors.leftMargin: containerHeader.leftIndent + containerHeader.iconSize + Theme.spacingM
-            anchors.right: expandIcon.left
-            anchors.rightMargin: Theme.spacingM
-            anchors.top: parent.top
-            anchors.topMargin: (containerHeader.baseHeight - headerTextColumn.height) / 2
-            spacing: 2
-
-            StyledText {
-                text: (useComposeServiceName && containerData?.composeService ? containerData?.composeService : containerData?.name) || ""
-                font.pixelSize: containerHeader.baseHeight >= 48 ? Theme.fontSizeMedium : Theme.fontSizeSmall
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
-                width: parent.width
-            }
-
-            StyledText {
-                text: containerData?.image || ""
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
-                width: parent.width
-            }
-        }
-
-        Flow {
-            id: portFlow
-            anchors.left: parent.left
-            anchors.leftMargin: containerHeader.leftIndent
-            anchors.right: parent.right
-            anchors.rightMargin: containerHeader.leftIndent
-            anchors.top: headerTextColumn.bottom
-            anchors.topMargin: Theme.spacingS
-            spacing: Theme.spacingXS
-            visible: isExpanded && root.showPorts && containerData?.ports?.length > 0
-            opacity: isExpanded && root.showPorts && containerData?.ports?.length > 0 ? 1 : 0
-
-            Behavior on opacity {
-                NumberAnimation {
-                    duration: Theme.expressiveDurations["expressiveEffects"]
-                    easing.type: Theme.standardEasing
-                }
-            }
-
-            Repeater {
-                model: containerData?.ports || []
-
-                StyledRect {
-                    height: 24
-                    width: portContent.width + Theme.spacingM
-                    radius: 12
-                    color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
-                    border.width: 1
-                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.3)
-
-                    Row {
-                        id: portContent
-                        anchors.centerIn: parent
-                        spacing: Theme.spacingXS
-
-                        DankIcon {
-                            name: "cloud"
-                            size: 13
-                            color: Theme.primary
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledText {
-                            text: modelData.hostPort
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: Font.Medium
-                            color: Theme.primary
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledText {
-                            text: "→"
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.6)
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        DankIcon {
-                            name: "deployed_code"
-                            size: 13
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.8)
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledText {
-                            text: modelData.containerPort.replace("/tcp", "").replace("/udp", "")
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.8)
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-                }
-            }
-        }
-
-        DankIcon {
-            id: expandIcon
-            name: isExpanded ? "expand_less" : "expand_more"
-            size: containerHeader.iconSize
-            color: Theme.surfaceText
-            anchors.right: parent.right
-            anchors.rightMargin: containerHeader.leftIndent
-            anchors.top: parent.top
-            anchors.topMargin: (containerHeader.baseHeight - expandIcon.height) / 2
-        }
-
-        MouseArea {
-            id: headerMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                root.keyboardNavigationActive = false;
-                containerHeader.clicked();
-            }
-        }
-    }
-
-    component ContainerActions: Column {
-        property var containerData: null
-        property real leftIndent: Theme.spacingL
-        property bool isExpanded: false
-        property bool isCurrentItem: false
-        property var actionButtons: [action0, action1, action2, action3, action4]
-
-        width: parent.width
-        spacing: 0
-        clip: true
-
-        height: isExpanded ? actionsColumn.height : 0
-        opacity: isExpanded ? 1 : 0
-
-        Behavior on height {
-            NumberAnimation {
-                duration: Theme.expressiveDurations["expressiveFastSpatial"]
-                easing.type: Theme.standardEasing
-            }
-        }
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.expressiveDurations["expressiveEffects"]
-                easing.type: Theme.standardEasing
-            }
-        }
-
-        Column {
-            id: actionsColumn
-            width: parent.width
-            spacing: 0
-
-            ActionButton {
-                id: action0
-                text: containerData?.isRunning ? "Restart" : "Start"
-                icon: containerData?.isRunning ? "refresh" : "play_arrow"
-                enabled: !containerData?.isPaused
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 0
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData, containerData.isRunning ? "restart" : "start")
-            }
-
-            ActionButton {
-                id: action1
-                text: containerData?.isPaused ? "Unpause" : "Pause"
-                icon: "pause"
-                enabled: containerData?.isRunning || containerData?.isPaused
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 1
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData, containerData.isPaused ? "unpause" : "pause")
-            }
-
-            ActionButton {
-                id: action2
-                text: "Stop"
-                icon: "stop"
-                enabled: containerData?.isRunning || containerData?.isPaused
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 2
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData, "stop")
-            }
-
-            ActionButton {
-                id: action3
-                text: "Shell"
-                icon: "terminal"
-                enabled: containerData?.isRunning
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 3
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.openExec(containerData)
-            }
-
-            ActionButton {
-                id: action4
-                text: "Logs"
-                icon: "description"
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 4
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.openLogs(containerData)
-            }
-        }
-    }
-
-    component ProjectActions: Column {
-        property var projectData: null
-        property real leftIndent: Theme.spacingL
-        property bool isExpanded: false
-        property bool isCurrentItem: false
-        property var actionButtons: [action0, action1, action2, action3]
-
-        width: parent.width
-        spacing: 0
-        clip: true
-
-        height: isExpanded ? actionsColumn.height : 0
-        opacity: isExpanded ? 1 : 0
-
-        Behavior on height {
-            NumberAnimation {
-                duration: Theme.expressiveDurations["expressiveFastSpatial"]
-                easing.type: Theme.standardEasing
-            }
-        }
-
-        Behavior on opacity {
-            NumberAnimation {
-                duration: Theme.expressiveDurations["expressiveEffects"]
-                easing.type: Theme.standardEasing
-            }
-        }
-
-        Column {
-            id: actionsColumn
-            width: parent.width
-            spacing: 0
-
-            ActionButton {
-                id: action0
-                text: "Start All"
+    function projectActions(project) {
+        const list = [];
+        if (project.runningCount < project.totalCount)
+            list.push({
+                id: "start",
+                label: "Start all",
                 icon: "play_arrow"
-                enabled: projectData?.runningCount < projectData?.totalCount
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 0
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData, "start")
-            }
-
-            ActionButton {
-                id: action1
-                text: "Restart All"
-                icon: "refresh"
-                enabled: projectData?.runningCount > 0
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 1
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData, "restart")
-            }
-
-            ActionButton {
-                id: action2
-                text: "Stop All"
+            });
+        list.push({
+            id: "restart",
+            label: "Restart all",
+            icon: "refresh"
+        });
+        if (project.runningCount > 0)
+            list.push({
+                id: "stop",
+                label: "Stop all",
                 icon: "stop"
-                enabled: projectData?.runningCount > 0
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 2
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData, "stop")
-            }
+            });
+        list.push({
+            id: "logs",
+            label: "View logs",
+            icon: "description"
+        });
+        return list;
+    }
 
-            ActionButton {
-                id: action3
-                text: "View Logs"
-                icon: "description"
-                isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 3
-                leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData, "logs")
-            }
+    // Two projects can share a name across runtimes. Then the badge is the only
+    // thing telling the rows apart, so it shows even with a single runtime up.
+    function projectShowsBadge(project) {
+        if (root.showBadges)
+            return true;
+        return globalComposeProjects.value.filter(p => p.name === project.name).length > 1;
+    }
+
+    function pastTense(action) {
+        return ({
+                start: "started",
+                stop: "stopped",
+                restart: "restarted",
+                pause: "paused",
+                unpause: "unpaused"
+            })[action] || action;
+    }
+
+    // ------------------------------------------------------------------
+    // Toast
+    // ------------------------------------------------------------------
+    function showToast(kind, title, detail) {
+        root.toastKind = kind;
+        root.toastTitle = title;
+        root.toastDetail = detail || "";
+        toastTimer.interval = kind === "error" ? 6000 : 2000;
+        toastTimer.restart();
+    }
+
+    function clearToast() {
+        root.toastKind = "";
+        root.toastTitle = "";
+        root.toastDetail = "";
+        toastTimer.stop();
+    }
+
+    Timer {
+        id: toastTimer
+        repeat: false
+        onTriggered: root.clearToast()
+    }
+
+    Timer {
+        id: uptimeTimer
+        interval: 30000
+        repeat: true
+        running: root.level === "container"
+        onTriggered: root.nowTick++
+    }
+
+    // ------------------------------------------------------------------
+    // Actions
+    // ------------------------------------------------------------------
+    function runContainerAction(container, actionId) {
+        if (!container)
+            return;
+
+        if (actionId === "shell") {
+            if (!GantryService.openExec(container.runtime, container.id || container.name))
+                root.showToast("error", `Could not open a shell in ${container.name}`, "");
+            return;
+        }
+        if (actionId === "logs") {
+            if (!GantryService.openLogs(container.runtime, container.id || container.name))
+                root.showToast("error", `Could not open logs for ${container.name}`, "");
+            return;
+        }
+
+        root.pendingAction = actionId;
+        const accepted = GantryService.executeAction(container.runtime, container.id || container.name, actionId, (success, message) => {
+            root.pendingAction = "";
+            if (success)
+                root.showToast("success", `${container.name} ${root.pastTense(actionId)}`, "");
+            else
+                root.showToast("error", `Failed to ${actionId} ${container.name}`, message);
+        });
+
+        if (!accepted) {
+            root.pendingAction = "";
+            root.showToast("error", `Failed to ${actionId} ${container.name}`, "runtime unavailable");
         }
     }
 
-    horizontalBarPill: Row {
-        spacing: Theme.spacingXS
+    function runProjectAction(project, actionId) {
+        if (!project)
+            return;
 
-        RuntimeIcon {
-            anchors.verticalCenter: parent.verticalCenter
+        if (actionId === "logs") {
+            if (!GantryService.executeComposeAction(project.runtime, project.workingDir, project.configFile, "logs"))
+                root.showToast("error", `Could not open logs for ${project.name}`, "");
+            return;
         }
 
-        RuntimeCount {
-            anchors.verticalCenter: parent.verticalCenter
-        }
-    }
+        root.pendingAction = actionId;
+        const accepted = GantryService.executeComposeAction(project.runtime, project.workingDir, project.configFile, actionId, (success, message) => {
+            root.pendingAction = "";
+            if (success)
+                root.showToast("success", `${project.name} ${root.pastTense(actionId)}`, "");
+            else
+                root.showToast("error", `Failed to ${actionId} ${project.name}`, message);
+        });
 
-    verticalBarPill: Column {
-        spacing: Theme.spacingXS
-
-        RuntimeIcon {
-            anchors.horizontalCenter: parent.horizontalCenter
-        }
-
-        RuntimeCount {
-            anchors.horizontalCenter: parent.horizontalCenter
-        }
-    }
-
-    popoutContent: Component {
-        FocusScope {
-            implicitWidth: popoutColumn.implicitWidth
-            implicitHeight: popoutColumn.implicitHeight
-            focus: true
-
-            property var parentPopout: null
-            Connections {
-                target: parentPopout
-                function onOpened() {
-                    Qt.callLater(() => {
-                        forceActiveFocus();
-                    });
-                }
-            }
-
-            Keys.onPressed: event => {
-                if (event.key === Qt.Key_Down || (event.key === Qt.Key_J && event.modifiers & Qt.ControlModifier) || 
-                    (event.key === Qt.Key_N && event.modifiers & Qt.ControlModifier)) {
-                    root.selectNext();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Up || (event.key === Qt.Key_K && event.modifiers & Qt.ControlModifier) || 
-                    (event.key === Qt.Key_P && event.modifiers & Qt.ControlModifier)) {
-                    root.selectPrevious();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Tab) {
-                    root.selectNext();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Backtab) {
-                    root.selectPrevious();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
-                    root.toggleSelected();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Right || (event.key === Qt.Key_L && event.modifiers & Qt.ControlModifier)) {
-                    root.enterActions();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_Left || (event.key === Qt.Key_H && event.modifiers & Qt.ControlModifier)) {
-                    root.exitActions();
-                    event.accepted = true;
-                } else if (event.key === Qt.Key_V) {
-                    root.toggleViewMode();
-                    event.accepted = true;
-                }
-            }
-
-            Column {
-                id: popoutColumn
-                spacing: 0
-                width: parent.width
-
-                Rectangle {
-                    width: parent.width
-                    height: 46
-                    color: "transparent"
-
-                    StyledText {
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.spacingM
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: root.anyRuntimeAvailable ? `${globalRunningContainers.value} running containers` : "No container runtime available"
-                        font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
-                        color: Theme.surfaceText
-                    }
-
-                    Row {
-                        anchors.right: parent.right
-                        anchors.rightMargin: Theme.spacingS
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Theme.spacingXS
-                        visible: globalComposeProjects.value.length > 0
-
-                        ViewToggleButton {
-                            iconName: "view_list"
-                            isActive: !root.groupByCompose
-                            onClicked: {
-                                root.groupByCompose = false;
-                                root.pluginService?.savePluginData("gantry", "groupByCompose", false);
-                            }
-                        }
-
-                        ViewToggleButton {
-                            iconName: "account_tree"
-                            isActive: root.groupByCompose
-                            onClicked: {
-                                root.groupByCompose = true;
-                                root.pluginService?.savePluginData("gantry", "groupByCompose", true);
-                            }
-                        }
-                    }
-                }
-
-                DankListView {
-                    id: containerList
-                    width: parent.width
-                    height: root.popoutHeight - 46 - Theme.spacingXL
-                    topMargin: 0
-                    bottomMargin: Theme.spacingS
-                    leftMargin: Theme.spacingM
-                    rightMargin: Theme.spacingM
-                    spacing: Theme.spacingS
-                    clip: true
-                    visible: !root.groupByCompose
-                    model: globalContainers.value
-                    currentIndex: root.keyboardNavigationActive && !root.groupByCompose ? root.getSelectedIndex() : -1
-
-                    Component.onCompleted: {
-                        root.containerListView = containerList;
-                    }
-
-                    delegate: StyledRect {
-                        id: containerDelegate
-                        width: containerList.width - containerList.leftMargin - containerList.rightMargin
-                        radius: Theme.cornerRadius
-                        Component.onCompleted: height = Qt.binding(() => containerHeaderPart.height + containerActionsPart.height)
-                        color: isCurrentItem ? Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency) : Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
-                        border.width: 1
-                        border.color: {
-                            if (modelData.isRunning) return Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.5)
-                            if (modelData.isPaused) return Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.5)
-                            return Theme.outlineLight
-                        }
-                        clip: true
-
-                        property bool isExpanded: root.expandedContainers[modelData.id] || false
-                        property bool isCurrentItem: root.keyboardNavigationActive && !root.groupByCompose && root.selectedItemId === modelData.id
-
-                        ContainerHeader {
-                            id: containerHeaderPart
-                            width: parent.width
-                            containerData: modelData
-                            isExpanded: containerDelegate.isExpanded
-                            isCurrentItem: containerDelegate.isCurrentItem
-                            defaultColor: "transparent"
-                            hoverColor: Theme.surfaceHover
-                            border.width: 0
-                            onClicked: root.toggleContainer(modelData.id)
-                        }
-
-                        ContainerActions {
-                            id: containerActionsPart
-                            width: parent.width
-                            anchors.top: containerHeaderPart.bottom
-                            containerData: modelData
-                            leftIndent: Theme.spacingL + Theme.spacingM
-                            isExpanded: containerDelegate.isExpanded
-                            isCurrentItem: containerDelegate.isCurrentItem
-                            onIsCurrentItemChanged: {
-                                if (isCurrentItem) {
-                                    root.currentActionsList = actionButtons;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                DankListView {
-                    id: projectList
-                    width: parent.width
-                    height: root.popoutHeight - 46 - Theme.spacingXL
-                    topMargin: 0
-                    bottomMargin: Theme.spacingS
-                    leftMargin: Theme.spacingM
-                    rightMargin: Theme.spacingM
-                    spacing: Theme.spacingS
-                    clip: true
-                    visible: root.groupByCompose
-                    model: globalComposeProjects.value
-                    currentIndex: root.keyboardNavigationActive && root.groupByCompose ? root.getSelectedProjectIndex() : -1
-
-                    Component.onCompleted: {
-                        root.projectListView = projectList;
-                    }
-
-                    delegate: StyledRect {
-                        id: projectDelegate
-                        width: projectList.width - projectList.leftMargin - projectList.rightMargin
-                        radius: Theme.cornerRadius
-                        Component.onCompleted: height = Qt.binding(() => projectHeaderPart.height + projectContentPart.height)
-                        color: isCurrentItem ? Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency) : Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
-                        border.width: 1
-                        border.color: {
-                            if (modelData.runningCount === modelData.totalCount && modelData.totalCount > 0)
-                                return Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.5)
-                            if (modelData.runningCount > 0)
-                                return Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.5)
-                            return Theme.outlineLight
-                        }
-                        clip: true
-
-                        property bool isExpanded: root.expandedProjects[modelData.key] || false
-                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && !root.selectedIsContainer && root.selectedItemId === modelData.key
-
-                        ProjectHeader {
-                            id: projectHeaderPart
-                            width: parent.width
-                            projectName: modelData.name
-                            runningCount: modelData.runningCount
-                            totalCount: modelData.totalCount
-                            serviceCount: modelData.containers.length
-                            isExpanded: projectDelegate.isExpanded
-                            isCurrentItem: projectDelegate.isCurrentItem
-                            color: "transparent"
-                            border.width: 0
-                            onClicked: root.toggleProject(modelData.key)
-                        }
-
-                        Column {
-                            id: projectContentPart
-                            width: parent.width
-                            anchors.top: projectHeaderPart.bottom
-                            spacing: 2
-                            clip: true
-
-                            property var project: modelData
-
-                            height: projectDelegate.isExpanded ? projectContentInner.height : 0
-                            opacity: projectDelegate.isExpanded ? 1 : 0
-
-                            Behavior on height {
-                                NumberAnimation {
-                                    duration: Theme.expressiveDurations["expressiveFastSpatial"]
-                                    easing.type: Theme.standardEasing
-                                }
-                            }
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: 200
-                                    easing.type: Easing.OutCubic
-                                }
-                            }
-
-                            Column {
-                                id: projectContentInner
-                                width: parent.width - Theme.spacingS * 2
-                                x: Theme.spacingS
-                                spacing: Theme.spacingXS
-                                topPadding: Theme.spacingXS
-                                bottomPadding: Theme.spacingS
-
-                                ProjectActions {
-                                    projectData: projectContentPart.project
-                                    leftIndent: Theme.spacingL
-                                    isExpanded: projectDelegate.isExpanded
-                                    isCurrentItem: projectDelegate.isCurrentItem
-                                    onIsCurrentItemChanged: {
-                                        if (isCurrentItem) {
-                                            root.currentActionsList = actionButtons;
-                                        }
-                                    }
-                                }
-
-                                Rectangle {
-                                    width: parent.width
-                                    height: Theme.spacingXS
-                                    color: "transparent"
-                                }
-
-                                Repeater {
-                                    model: projectContentPart.project.containers
-
-                                    StyledRect {
-                                        id: serviceDelegate
-                                        width: parent.width
-                                        radius: Theme.cornerRadius
-                                        Component.onCompleted: height = Qt.binding(() => serviceHeaderPart.height + serviceActionsPart.height)
-                                        color: isCurrentItem ? Theme.withAlpha(Theme.surfaceContainerHighest, Theme.popupTransparency) : Theme.nestedSurface
-                                        border.width: 1
-                                        border.color: {
-                                            if (container.isRunning) return Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.4)
-                                            if (container.isPaused) return Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.4)
-                                            return Theme.outlineLight
-                                        }
-                                        clip: true
-
-                                        property var container: modelData
-                                        property bool isExpanded: root.expandedContainers[container.key] || false
-                                        property bool isCurrentItem: root.keyboardNavigationActive && root.groupByCompose && root.selectedIsContainer && root.selectedItemId === container.key
-
-                                        ContainerHeader {
-                                            id: serviceHeaderPart
-                                            width: parent.width
-                                            containerData: container
-                                            isExpanded: serviceDelegate.isExpanded
-                                            isCurrentItem: serviceDelegate.isCurrentItem
-                                            useComposeServiceName: true
-                                            leftIndent: Theme.spacingM
-                                            iconSize: Theme.iconSize - 2
-                                            baseHeight: 38
-                                            defaultColor: "transparent"
-                                            hoverColor: Theme.surfaceHover
-                                            border.width: 0
-                                            onClicked: root.toggleContainer(container.key, projectContentPart.project.key)
-                                        }
-
-                                        ContainerActions {
-                                            id: serviceActionsPart
-                                            width: parent.width
-                                            anchors.top: serviceHeaderPart.bottom
-                                            containerData: container
-                                            leftIndent: Theme.spacingM + Theme.spacingL
-                                            isExpanded: serviceDelegate.isExpanded
-                                            isCurrentItem: serviceDelegate.isCurrentItem
-                                            onIsCurrentItemChanged: {
-                                                if (isCurrentItem) {
-                                                    root.currentActionsList = actionButtons;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if (!accepted) {
+            root.pendingAction = "";
+            root.showToast("error", `Failed to ${actionId} ${project.name}`, "runtime unavailable");
         }
     }
 
-    component ViewToggleButton: Rectangle {
-        property string iconName: ""
-        property bool isActive: false
-        signal clicked
+    // ------------------------------------------------------------------
+    // Navigation
+    // ------------------------------------------------------------------
+    function openContainerSheet(container, fromProjectKey) {
+        root.openContainerKey = container.key;
+        root.openProjectKey = fromProjectKey || "";
+        root.level = "container";
+        root.sheetSection = "actions";
+        root.selectedIndex = 0;
+        root.clearToast();
+    }
 
-        width: 36
-        height: 36
-        radius: Theme.cornerRadius
-        color: isActive ? Theme.primaryHover : mouseArea.containsMouse ? Theme.surfaceHover : "transparent"
+    function openProjectSheet(project) {
+        root.openProjectKey = project.key;
+        root.level = "project";
+        root.sheetSection = "actions";
+        root.selectedIndex = 0;
+        root.clearToast();
+    }
 
-        DankIcon {
+    function goBack() {
+        root.clearToast();
+        if (root.level === "container") {
+            if (root.openProjectKey) {
+                root.level = "project";
+                root.sheetSection = "services";
+                root.selectedIndex = Math.max(0, root.sheetServices.findIndex(c => c.key === root.openContainerKey));
+            } else {
+                root.level = "root";
+                root.sheetSection = "actions";
+                root.selectedIndex = Math.max(0, root.rootList.findIndex(c => c.key === root.openContainerKey));
+            }
+            root.openContainerKey = "";
+            return;
+        }
+        if (root.level === "project") {
+            root.level = "root";
+            root.sheetSection = "actions";
+            root.selectedIndex = Math.max(0, root.rootList.findIndex(p => p.key === root.openProjectKey));
+            root.openProjectKey = "";
+        }
+    }
+
+    function goRoot() {
+        root.level = "root";
+        root.openProjectKey = "";
+        root.openContainerKey = "";
+        root.sheetSection = "actions";
+        root.selectedIndex = 0;
+        root.keyboardActive = false;
+        root.clearToast();
+    }
+
+    function toggleView() {
+        if (root.level !== "root")
+            return;
+        root.groupByCompose = !root.groupByCompose;
+        root.pluginService?.savePluginData(GantryService.pluginId, "groupByCompose", root.groupByCompose);
+        root.selectedIndex = 0;
+    }
+
+    function currentListLength() {
+        if (root.level === "root")
+            return root.rootList.length;
+        if (root.level === "project")
+            return root.sheetSection === "services" ? root.sheetServices.length : root.sheetActions.length;
+        return root.sheetActions.length;
+    }
+
+    function moveSelection(delta) {
+        const length = currentListLength();
+        if (length === 0)
+            return;
+        if (!root.keyboardActive) {
+            root.keyboardActive = true;
+            root.selectedIndex = Math.max(0, Math.min(root.selectedIndex, length - 1));
+            return;
+        }
+        root.selectedIndex = Math.max(0, Math.min(root.selectedIndex + delta, length - 1));
+    }
+
+    function activateSelection() {
+        root.keyboardActive = true;
+        if (root.level === "root") {
+            const item = root.rootList[root.selectedIndex];
+            if (!item)
+                return;
+            if (root.groupByCompose)
+                root.openProjectSheet(item);
+            else
+                root.openContainerSheet(item, "");
+            return;
+        }
+
+        if (root.level === "project" && root.sheetSection === "services") {
+            const service = root.sheetServices[root.selectedIndex];
+            if (service)
+                root.openContainerSheet(service, root.openProjectKey);
+            return;
+        }
+
+        const action = root.sheetActions[root.selectedIndex];
+        if (!action || root.pendingAction)
+            return;
+        if (root.level === "project")
+            root.runProjectAction(root.openProject, action.id);
+        else
+            root.runContainerAction(root.openContainer, action.id);
+    }
+
+    function switchSheetSection() {
+        if (root.level !== "project" || root.sheetServices.length === 0)
+            return;
+        root.sheetSection = root.sheetSection === "actions" ? "services" : "actions";
+        root.selectedIndex = 0;
+        root.keyboardActive = true;
+    }
+
+    Component.onCompleted: {
+        // Singletons are lazy in QML; this is what instantiates the service.
+        console.log(GantryService.pluginId, "loaded.");
+    }
+
+    // ------------------------------------------------------------------
+    // Building blocks
+    // ------------------------------------------------------------------
+    component RuntimeBadge: Rectangle {
+        id: runtimeBadge
+        property string runtimeId: ""
+
+        implicitWidth: badgeLabel.implicitWidth + 12
+        implicitHeight: 16
+        radius: 5
+        color: Qt.rgba(root.runtimeTint(runtimeId).r, root.runtimeTint(runtimeId).g, root.runtimeTint(runtimeId).b, 0.18)
+
+        StyledText {
+            id: badgeLabel
             anchors.centerIn: parent
-            name: iconName
-            size: 18
-            color: isActive ? Theme.primary : Theme.surfaceText
+            text: runtimeBadge.runtimeId
+            font.family: "monospace"
+            font.pixelSize: 10
+            color: root.runtimeTint(runtimeBadge.runtimeId)
         }
+    }
+
+    component ChipPill: Rectangle {
+        id: chipPill
+        property string label: ""
+        property color tint: Theme.primary
+
+        implicitWidth: chipLabel.implicitWidth + 16
+        implicitHeight: 20
+        radius: 999
+        color: Qt.rgba(tint.r, tint.g, tint.b, 0.15)
+
+        StyledText {
+            id: chipLabel
+            anchors.centerIn: parent
+            text: chipPill.label
+            font.family: "monospace"
+            font.pixelSize: 11
+            color: chipPill.tint
+        }
+    }
+
+    component MetaField: Column {
+        id: metaField
+        property string label: ""
+        spacing: 3
+
+        StyledText {
+            text: metaField.label.toUpperCase()
+            font.pixelSize: 10
+            font.letterSpacing: 0.08 * 10
+            color: Theme.surfaceVariantText
+        }
+    }
+
+    component ListRow: Rectangle {
+        id: listRow
+        property bool isSelected: false
+        signal activated
+
+        width: parent ? parent.width : 0
+        height: 42
+        radius: 14
+        color: (isSelected || rowMouse.containsMouse) ? Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency) : "transparent"
 
         MouseArea {
-            id: mouseArea
+            id: rowMouse
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
+            onClicked: {
+                root.keyboardActive = false;
+                listRow.activated();
+            }
         }
     }
 
-    component ActionButton: Rectangle {
-        id: actionButton
-        property string text: ""
+    component ActionRow: Rectangle {
+        id: actionRow
+        property string label: ""
         property string icon: ""
-        property bool enabled: true
         property bool isSelected: false
-        property real leftIndent: Theme.spacingL + Theme.spacingM
-        signal triggered
+        property bool busy: false
+        property bool blocked: false
+        signal activated
 
-        width: parent.width
+        width: parent ? parent.width : 0
         height: 44
-        radius: 0
-        color: isSelected ? Theme.primaryHover : (actionMouse.containsMouse ? Theme.surfaceHover : "transparent")
-        border.width: 0
-        opacity: enabled ? 1.0 : 0.5
+        radius: 14
+        opacity: blocked && !busy ? 0.5 : 1
+        color: (isSelected || actionMouse.containsMouse) && !blocked ? Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency) : "transparent"
 
         Row {
-            anchors.fill: parent
-            anchors.leftMargin: actionButton.leftIndent
-            spacing: Theme.spacingM
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 12
 
-            DankIcon {
-                name: actionButton.icon
-                size: Theme.iconSize
-                color: Theme.surfaceText
+            Item {
+                width: 20
+                height: 20
                 anchors.verticalCenter: parent.verticalCenter
+
+                DankIcon {
+                    anchors.centerIn: parent
+                    name: actionRow.icon
+                    size: 20
+                    color: Theme.surfaceText
+                    visible: !actionRow.busy
+                }
+
+                DankSpinner {
+                    anchors.centerIn: parent
+                    size: 18
+                    color: Theme.primary
+                    visible: actionRow.busy
+                    running: actionRow.busy
+                }
             }
 
             StyledText {
-                text: actionButton.text
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Normal
+                text: actionRow.label
+                font.pixelSize: 14
                 color: Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
             }
@@ -1241,15 +605,891 @@ PluginComponent {
             id: actionMouse
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: actionButton.enabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-            enabled: actionButton.enabled
+            enabled: !actionRow.blocked
+            cursorShape: actionRow.blocked ? Qt.ForbiddenCursor : Qt.PointingHandCursor
             onClicked: {
-                root.keyboardNavigationActive = false;
-                actionButton.triggered();
+                root.keyboardActive = false;
+                actionRow.activated();
             }
         }
     }
 
-    popoutWidth: 400
-    popoutHeight: 500
+    component EmptyState: Column {
+        id: emptyState
+        property string icon: "deployed_code"
+        property string title: ""
+        property string subtitle: ""
+        property color iconColor: Theme.surfaceVariantText
+
+        width: parent ? parent.width : 0
+        topPadding: 32
+        bottomPadding: 32
+        spacing: 10
+
+        DankIcon {
+            anchors.horizontalCenter: parent.horizontalCenter
+            name: emptyState.icon
+            size: 34
+            color: emptyState.iconColor
+        }
+
+        StyledText {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: emptyState.title
+            font.pixelSize: 14
+            font.weight: Font.Medium
+            color: Theme.surfaceText
+        }
+
+        StyledText {
+            width: emptyState.width - 40
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: emptyState.subtitle
+            font.pixelSize: 12
+            color: Theme.surfaceVariantText
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+        }
+    }
+
+    component SheetHeader: Item {
+        id: sheetHeader
+        property string title: ""
+        property string subtitle: ""
+
+        width: parent ? parent.width : 0
+        height: 40
+
+        Rectangle {
+            id: backButton
+            width: 36
+            height: 36
+            radius: 12
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            color: backMouse.containsMouse ? Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency) : Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency)
+
+            DankIcon {
+                anchors.centerIn: parent
+                name: "arrow_back"
+                size: 20
+                color: Theme.surfaceText
+            }
+
+            MouseArea {
+                id: backMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.goBack()
+            }
+        }
+
+        Column {
+            anchors.left: backButton.right
+            anchors.leftMargin: 12
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 1
+
+            StyledText {
+                text: sheetHeader.title
+                font.pixelSize: 15
+                font.weight: Font.Medium
+                color: Theme.surfaceText
+                elide: Text.ElideRight
+                width: parent.width
+            }
+
+            StyledText {
+                text: sheetHeader.subtitle
+                font.family: "monospace"
+                font.pixelSize: 11
+                color: Theme.surfaceVariantText
+                elide: Text.ElideRight
+                width: parent.width
+                visible: text !== ""
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Bar pill
+    // ------------------------------------------------------------------
+    component TrayIcon: DankNFIcon {
+        name: "docker"
+        size: root.iconSize
+        color: (!root.anyRuntimeAvailable || globalRunningContainers.value === 0) ? Theme.surfaceVariantText : (Theme.widgetIconColor || Theme.surfaceText)
+        opacity: (!root.anyRuntimeAvailable || globalRunningContainers.value === 0) ? 0.6 : 1
+    }
+
+    component TrayCount: StyledText {
+        text: globalRunningContainers.value.toString()
+        font.family: "monospace"
+        font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
+        color: Theme.widgetTextColor || Theme.surfaceText
+        visible: root.anyRuntimeAvailable && globalRunningContainers.value > 0
+    }
+
+    horizontalBarPill: Row {
+        spacing: Theme.spacingXS
+
+        TrayIcon {
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
+        TrayCount {
+            anchors.verticalCenter: parent.verticalCenter
+        }
+    }
+
+    verticalBarPill: Column {
+        spacing: Theme.spacingXS
+
+        TrayIcon {
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+
+        TrayCount {
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Popout
+    // ------------------------------------------------------------------
+    popoutContent: Component {
+        FocusScope {
+            id: popout
+            focus: true
+
+            property var parentPopout: null
+
+            Connections {
+                target: popout.parentPopout
+                function onOpened() {
+                    root.goRoot();
+                    Qt.callLater(() => popout.forceActiveFocus());
+                }
+            }
+
+            Keys.onPressed: event => {
+                const ctrl = event.modifiers & Qt.ControlModifier;
+                if (event.key === Qt.Key_Down || (ctrl && (event.key === Qt.Key_J || event.key === Qt.Key_N))) {
+                    root.moveSelection(1);
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Up || (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_P))) {
+                    root.moveSelection(-1);
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    root.activateSelection();
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Left) {
+                    root.goBack();
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Escape) {
+                    root.closePopout();
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_Tab) {
+                    root.switchSheetSection();
+                    event.accepted = true;
+                } else if (event.key === Qt.Key_V && root.level === "root") {
+                    root.toggleView();
+                    event.accepted = true;
+                }
+            }
+
+            Column {
+                id: popoutColumn
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 12
+
+                // ---------- segmented control (root only) ----------
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: 999
+                    color: Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency)
+                    visible: root.level === "root" && root.anyRuntimeAvailable
+
+                    Rectangle {
+                        width: parent.width / 2
+                        height: parent.height - 4
+                        x: root.groupByCompose ? parent.width / 2 : 2
+                        y: 2
+                        radius: 999
+                        color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.22)
+
+                        Behavior on x {
+                            NumberAnimation {
+                                duration: Theme.expressiveDurations["expressiveFastSpatial"] ?? 250
+                                easing.type: Theme.standardEasing
+                            }
+                        }
+                    }
+
+                    Row {
+                        anchors.fill: parent
+
+                        Repeater {
+                            model: [
+                                {
+                                    label: "Containers",
+                                    compose: false
+                                },
+                                {
+                                    label: "Compose",
+                                    compose: true
+                                }
+                            ]
+
+                            Item {
+                                required property var modelData
+                                width: parent.width / 2
+                                height: parent.height
+
+                                StyledText {
+                                    anchors.centerIn: parent
+                                    text: parent.modelData.label
+                                    font.pixelSize: 13
+                                    font.weight: Font.Medium
+                                    color: root.groupByCompose === parent.modelData.compose ? Theme.primary : Theme.surfaceVariantText
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (root.groupByCompose !== parent.modelData.compose)
+                                            root.toggleView();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---------- sheet header ----------
+                SheetHeader {
+                    visible: root.level === "container"
+                    title: root.openContainer?.name || ""
+                    subtitle: root.openContainer?.image || ""
+                }
+
+                SheetHeader {
+                    visible: root.level === "project"
+                    title: root.openProject?.name || ""
+                    subtitle: root.openProject ? `${root.openProject.runningCount}/${root.openProject.totalCount} running · ${root.openProject.runtime}` : ""
+                }
+
+                // ---------- partially-down banner ----------
+                Rectangle {
+                    width: parent.width
+                    height: 34
+                    radius: 14
+                    visible: root.partiallyDown
+                    color: Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.16)
+
+                    Row {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 8
+
+                        DankIcon {
+                            name: "warning"
+                            size: 18
+                            color: Theme.warning
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: `${root.downRuntimeIds.join(", ")} unavailable — showing ${root.availableRuntimeIds.join(", ")} only`
+                            font.pixelSize: 12
+                            color: Theme.warning
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                }
+
+                // ---------- body ----------
+                Item {
+                    width: parent.width
+                    height: Math.max(0, popoutColumn.height - y)
+
+                    // no runtime at all
+                    EmptyState {
+                        anchors.centerIn: parent
+                        visible: !root.anyRuntimeAvailable
+                        icon: "power_off"
+                        iconColor: Theme.error
+                        title: "No container runtime available"
+                        subtitle: root.checkedRuntimeCount > 1 ? `Neither ${Object.keys(globalRuntimeAvailable.value || {}).join(" nor ")} responded.` : "No runtime responded."
+                    }
+
+                    // Root lists are two separate views on purpose. Sharing one
+                    // delegate meant the project row's bindings were evaluated
+                    // against container data, and vice versa.
+                    DankListView {
+                        id: containerListView
+                        anchors.fill: parent
+                        visible: root.anyRuntimeAvailable && root.level === "root" && !root.groupByCompose && root.rootList.length > 0
+                        spacing: 2
+                        clip: true
+                        model: root.groupByCompose ? [] : root.rootList
+                        currentIndex: root.keyboardActive ? root.selectedIndex : -1
+
+                        delegate: ListRow {
+                            id: containerRow
+                            required property var modelData
+                            required property int index
+
+                            width: containerListView.width
+                            isSelected: root.keyboardActive && root.selectedIndex === index
+                            opacity: (modelData.isRunning || modelData.isPaused) ? 1 : 0.6
+                            onActivated: root.openContainerSheet(modelData, "")
+
+                            Rectangle {
+                                id: stateDot
+                                width: 8
+                                height: 8
+                                radius: 4
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: root.stateColor(containerRow.modelData)
+                            }
+
+                            Row {
+                                anchors.left: stateDot.right
+                                anchors.leftMargin: 10
+                                anchors.right: containerChevron.left
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 6
+
+                                StyledText {
+                                    text: containerRow.modelData.name
+                                    font.pixelSize: 14
+                                    font.weight: Font.Medium
+                                    color: Theme.surfaceText
+                                    elide: Text.ElideRight
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    // The name is the last thing to give up space.
+                                    width: Math.min(implicitWidth, Math.max(60, parent.width - (rowBadge.visible ? rowBadge.width + 6 : 0) - 70))
+                                }
+
+                                RuntimeBadge {
+                                    id: rowBadge
+                                    runtimeId: containerRow.modelData.runtime
+                                    visible: root.showBadges
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: root.secondaryText(containerRow.modelData)
+                                    font.family: "monospace"
+                                    font.pixelSize: 11
+                                    color: Theme.surfaceVariantText
+                                    elide: Text.ElideRight
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: Math.max(0, parent.width - x)
+                                }
+                            }
+
+                            DankIcon {
+                                id: containerChevron
+                                name: "chevron_right"
+                                size: 20
+                                color: Theme.surfaceVariantText
+                                anchors.right: parent.right
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                    }
+
+                    DankListView {
+                        id: projectListView
+                        anchors.fill: parent
+                        visible: root.anyRuntimeAvailable && root.level === "root" && root.groupByCompose && root.rootList.length > 0
+                        spacing: 2
+                        clip: true
+                        model: root.groupByCompose ? root.rootList : []
+                        currentIndex: root.keyboardActive ? root.selectedIndex : -1
+
+                        delegate: ListRow {
+                            id: projectRow
+                            required property var modelData
+                            required property int index
+
+                            width: projectListView.width
+                            isSelected: root.keyboardActive && root.selectedIndex === index
+                            opacity: modelData.runningCount > 0 ? 1 : 0.6
+                            onActivated: root.openProjectSheet(modelData)
+
+                            DankIcon {
+                                id: projectIcon
+                                name: "account_tree"
+                                size: 20
+                                color: projectRow.modelData.runningCount > 0 ? Theme.primary : Theme.surfaceVariantText
+                                anchors.left: parent.left
+                                anchors.leftMargin: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Column {
+                                anchors.left: projectIcon.right
+                                anchors.leftMargin: 10
+                                anchors.right: projectChevron.left
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 1
+
+                                Row {
+                                    spacing: 6
+
+                                    StyledText {
+                                        text: projectRow.modelData.name
+                                        font.pixelSize: 14
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceText
+                                        elide: Text.ElideRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    RuntimeBadge {
+                                        runtimeId: projectRow.modelData.runtime
+                                        visible: root.projectShowsBadge(projectRow.modelData)
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+
+                                StyledText {
+                                    text: `${projectRow.modelData.runningCount}/${projectRow.modelData.totalCount} running · ${projectRow.modelData.containers.length} service${projectRow.modelData.containers.length !== 1 ? "s" : ""}`
+                                    font.family: "monospace"
+                                    font.pixelSize: 11
+                                    color: Theme.surfaceVariantText
+                                }
+                            }
+
+                            DankIcon {
+                                id: projectChevron
+                                name: "chevron_right"
+                                size: 20
+                                color: Theme.surfaceVariantText
+                                anchors.right: parent.right
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                    }
+
+                    // empty root list
+                    EmptyState {
+                        anchors.centerIn: parent
+                        visible: root.anyRuntimeAvailable && root.level === "root" && root.rootList.length === 0
+                        icon: root.groupByCompose ? "account_tree" : "deployed_code"
+                        title: root.groupByCompose ? "No compose projects" : "No containers"
+                        subtitle: `${root.availableRuntimeIds.join(" and ")} ${root.availableRuntimeIds.length > 1 ? "are" : "is"} running but ${root.availableRuntimeIds.length > 1 ? "have" : "has"} nothing to show.`
+                    }
+
+                    // ---------- container sheet ----------
+                    Flickable {
+                        anchors.fill: parent
+                        visible: root.level === "container" && root.openContainer !== null
+                        contentHeight: containerSheet.height
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        Column {
+                            id: containerSheet
+                            width: parent.width
+                            spacing: 12
+
+                            // state chip
+                            Row {
+                                spacing: 6
+
+                                ChipPill {
+                                    readonly property var container: root.openContainer
+                                    tint: root.stateColor(container)
+                                    label: container ? (container.health ? `${container.state} · ${container.health}` : container.state) : ""
+                                }
+                            }
+
+                            // metadata card
+                            Rectangle {
+                                width: parent.width
+                                radius: 16
+                                color: Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency)
+                                height: metaGrid.height + 24
+                                visible: metaGrid.children.length > 0
+
+                                Column {
+                                    id: metaGrid
+                                    x: 12
+                                    y: 12
+                                    width: parent.width - 24
+                                    spacing: 16
+
+                                    // two-column pairs
+                                    Grid {
+                                        width: parent.width
+                                        columns: 2
+                                        columnSpacing: 12
+                                        rowSpacing: 16
+
+                                        MetaField {
+                                            label: "Runtime"
+                                            width: (parent.width - 12) / 2
+
+                                            StyledText {
+                                                text: root.openContainer?.runtime || ""
+                                                font.family: "monospace"
+                                                font.pixelSize: 12
+                                                color: Theme.surfaceText
+                                            }
+                                        }
+
+                                        MetaField {
+                                            label: "Uptime"
+                                            width: (parent.width - 12) / 2
+                                            visible: root.openContainer?.isRunning ?? false
+
+                                            StyledText {
+                                                text: {
+                                                    root.nowTick;
+                                                    return root.openContainer ? root.formatUptime(root.openContainer.startedAt) : "";
+                                                }
+                                                font.family: "monospace"
+                                                font.pixelSize: 12
+                                                color: Theme.surfaceText
+                                            }
+                                        }
+
+                                        MetaField {
+                                            label: "Project"
+                                            width: (parent.width - 12) / 2
+                                            visible: (root.openContainer?.composeProject || "") !== ""
+
+                                            StyledText {
+                                                text: root.openContainer?.composeProject || ""
+                                                font.pixelSize: 12
+                                                color: Theme.surfaceText
+                                            }
+                                        }
+
+                                        MetaField {
+                                            label: "Pod"
+                                            width: (parent.width - 12) / 2
+                                            visible: (root.openContainer?.pod || "") !== ""
+
+                                            StyledText {
+                                                text: root.openContainer?.pod || ""
+                                                font.family: "monospace"
+                                                font.pixelSize: 12
+                                                color: Theme.surfaceText
+                                            }
+                                        }
+
+                                        MetaField {
+                                            label: "Restarts"
+                                            width: (parent.width - 12) / 2
+                                            visible: (root.openContainer?.restartCount || 0) > 0
+
+                                            StyledText {
+                                                text: String(root.openContainer?.restartCount || 0)
+                                                font.family: "monospace"
+                                                font.pixelSize: 12
+                                                color: Theme.surfaceText
+                                            }
+                                        }
+                                    }
+
+                                    MetaField {
+                                        label: "Ports"
+                                        width: parent.width
+                                        visible: (root.openContainer?.ports?.length || 0) > 0
+
+                                        Flow {
+                                            width: parent.width
+                                            spacing: 6
+
+                                            Repeater {
+                                                model: root.openContainer?.ports || []
+
+                                                ChipPill {
+                                                    required property var modelData
+                                                    label: `${modelData.hostPort} → ${modelData.containerPort.replace("/tcp", "").replace("/udp", "")}`
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    MetaField {
+                                        label: "Mounts"
+                                        width: parent.width
+                                        visible: (root.openContainer?.mounts?.length || 0) > 0
+
+                                        Column {
+                                            width: parent.width
+                                            spacing: 3
+
+                                            Repeater {
+                                                model: root.openContainer?.mounts || []
+
+                                                StyledText {
+                                                    required property var modelData
+                                                    width: parent.width
+                                                    text: `${modelData.source} → ${modelData.destination}`
+                                                    font.family: "monospace"
+                                                    font.pixelSize: 11
+                                                    color: Theme.surfaceText
+                                                    elide: Text.ElideMiddle
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    MetaField {
+                                        label: "Networks"
+                                        width: parent.width
+                                        visible: (root.openContainer?.networks?.length || 0) > 0
+
+                                        Flow {
+                                            width: parent.width
+                                            spacing: 6
+
+                                            Repeater {
+                                                model: root.openContainer?.networks || []
+
+                                                ChipPill {
+                                                    required property var modelData
+                                                    label: modelData
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // actions
+                            Column {
+                                width: parent.width
+                                spacing: 2
+
+                                Repeater {
+                                    model: root.sheetActions
+
+                                    ActionRow {
+                                        required property var modelData
+                                        required property int index
+                                        label: modelData.label
+                                        icon: modelData.icon
+                                        busy: root.pendingAction === modelData.id
+                                        blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
+                                        isSelected: root.keyboardActive && root.selectedIndex === index
+                                        onActivated: root.runContainerAction(root.openContainer, modelData.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---------- project sheet ----------
+                    Flickable {
+                        anchors.fill: parent
+                        visible: root.level === "project" && root.openProject !== null
+                        contentHeight: projectSheet.height
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        Column {
+                            id: projectSheet
+                            width: parent.width
+                            spacing: 10
+
+                            Column {
+                                width: parent.width
+                                spacing: 2
+
+                                Repeater {
+                                    model: root.sheetActions
+
+                                    ActionRow {
+                                        required property var modelData
+                                        required property int index
+                                        label: modelData.label
+                                        icon: modelData.icon
+                                        busy: root.pendingAction === modelData.id
+                                        blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
+                                        isSelected: root.keyboardActive && root.sheetSection === "actions" && root.selectedIndex === index
+                                        onActivated: root.runProjectAction(root.openProject, modelData.id)
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: parent.width
+                                height: 1
+                                color: Theme.outlineLight
+                            }
+
+                            StyledText {
+                                x: 6
+                                text: "SERVICES"
+                                font.pixelSize: 10
+                                font.letterSpacing: 0.08 * 10
+                                color: Theme.surfaceVariantText
+                            }
+
+                            Column {
+                                width: parent.width
+                                spacing: 2
+
+                                Repeater {
+                                    model: root.sheetServices
+
+                                    ListRow {
+                                        id: serviceRow
+                                        required property var modelData
+                                        required property int index
+                                        isSelected: root.keyboardActive && root.sheetSection === "services" && root.selectedIndex === index
+                                        opacity: (modelData.isRunning || modelData.isPaused) ? 1 : 0.6
+                                        onActivated: root.openContainerSheet(modelData, root.openProjectKey)
+
+                                        Rectangle {
+                                            id: serviceDot
+                                            width: 8
+                                            height: 8
+                                            radius: 4
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: 12
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: root.stateColor(serviceRow.modelData)
+                                        }
+
+                                        Column {
+                                            anchors.left: serviceDot.right
+                                            anchors.leftMargin: 10
+                                            anchors.right: parent.right
+                                            anchors.rightMargin: 32
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            spacing: 1
+
+                                            StyledText {
+                                                text: serviceRow.modelData.composeService || serviceRow.modelData.name
+                                                font.pixelSize: 14
+                                                font.weight: Font.Medium
+                                                color: Theme.surfaceText
+                                                elide: Text.ElideRight
+                                                width: parent.width
+                                            }
+
+                                            StyledText {
+                                                text: {
+                                                    const ports = serviceRow.modelData.ports || [];
+                                                    if (ports.length > 0)
+                                                        return `${ports[0].hostPort} → ${ports[0].containerPort.replace("/tcp", "").replace("/udp", "")}`;
+                                                    return serviceRow.modelData.image;
+                                                }
+                                                font.family: "monospace"
+                                                font.pixelSize: 11
+                                                color: Theme.surfaceVariantText
+                                                elide: Text.ElideRight
+                                                width: parent.width
+                                            }
+                                        }
+
+                                        DankIcon {
+                                            name: "chevron_right"
+                                            size: 20
+                                            color: Theme.surfaceVariantText
+                                            anchors.right: parent.right
+                                            anchors.rightMargin: 8
+                                            anchors.verticalCenter: parent.verticalCenter
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---------- toast ----------
+                    Rectangle {
+                        id: toast
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: toastColumn.height + 20
+                        radius: 16
+                        visible: root.toastKind !== ""
+                        color: root.toastKind === "error" ? Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.22) : Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.width: 1
+                        border.color: root.toastKind === "error" ? Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.45) : Theme.outlineLight
+
+                        Row {
+                            x: 12
+                            y: 10
+                            width: parent.width - 24
+                            spacing: 10
+
+                            DankIcon {
+                                name: root.toastKind === "error" ? "error" : "check_circle"
+                                size: 18
+                                color: root.toastKind === "error" ? Theme.error : Theme.primary
+                            }
+
+                            Column {
+                                id: toastColumn
+                                width: parent.width - 28
+                                spacing: 2
+
+                                StyledText {
+                                    text: root.toastTitle
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                    color: Theme.surfaceText
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                }
+
+                                StyledText {
+                                    text: root.toastDetail
+                                    font.family: "monospace"
+                                    font.pixelSize: 11
+                                    color: Theme.surfaceVariantText
+                                    width: parent.width
+                                    visible: text !== ""
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: root.toastKind === "error"
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.clearToast()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    popoutWidth: 460
+    popoutHeight: {
+        if (level !== "root")
+            return 520;
+        if (!anyRuntimeAvailable)
+            return 240;
+        if (rootList.length === 0)
+            return 260;
+        return Math.min(520, 28 + 34 + 12 + (partiallyDown ? 46 : 0) + rootList.length * 44);
+    }
 }
