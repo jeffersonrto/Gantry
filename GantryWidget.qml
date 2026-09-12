@@ -120,24 +120,35 @@ PluginComponent {
         }
     }
 
-    function executeAction(containerId, action) {
-        if (GantryService.executeAction(containerId, action)) {
+    // Every action is routed by the container's own runtime. The service refuses
+    // and returns false when that runtime is unknown or disabled, so a failure is
+    // surfaced instead of being retried against the wrong binary.
+    function executeAction(container, action) {
+        if (GantryService.executeAction(container.runtime, container.id || container.name, action)) {
             ToastService.showInfo("Executing " + action + " on container");
+        } else {
+            ToastService.showError("Could not run " + action + " on " + container.name);
         }
     }
 
-    function executeComposeAction(workingDir, configFile, action) {
-        if (GantryService.executeComposeAction(workingDir, configFile, action)) {
+    function executeComposeAction(project, action) {
+        if (GantryService.executeComposeAction(project.runtime, project.workingDir, project.configFile, action)) {
             ToastService.showInfo("Executing " + action + " on project");
+        } else {
+            ToastService.showError("Could not run " + action + " on " + project.name);
         }
     }
 
-    function openLogs(containerId) {
-        GantryService.openLogs(containerId);
+    function openLogs(container) {
+        if (!GantryService.openLogs(container.runtime, container.id || container.name)) {
+            ToastService.showError("Could not open logs for " + container.name);
+        }
     }
 
-    function openExec(containerId) {
-        GantryService.openExec(containerId);
+    function openExec(container) {
+        if (!GantryService.openExec(container.runtime, container.id || container.name)) {
+            ToastService.showError("Could not open a shell in " + container.name);
+        }
     }
 
     function buildNavigableList() {
@@ -700,7 +711,7 @@ PluginComponent {
                 enabled: !containerData?.isPaused
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 0
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData.id || containerData.name, containerData.isRunning ? "restart" : "start")
+                onTriggered: root.executeAction(containerData, containerData.isRunning ? "restart" : "start")
             }
 
             ActionButton {
@@ -710,7 +721,7 @@ PluginComponent {
                 enabled: containerData?.isRunning || containerData?.isPaused
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 1
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData.id || containerData.name, containerData.isPaused ? "unpause" : "pause")
+                onTriggered: root.executeAction(containerData, containerData.isPaused ? "unpause" : "pause")
             }
 
             ActionButton {
@@ -720,7 +731,7 @@ PluginComponent {
                 enabled: containerData?.isRunning || containerData?.isPaused
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 2
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeAction(containerData.id || containerData.name, "stop")
+                onTriggered: root.executeAction(containerData, "stop")
             }
 
             ActionButton {
@@ -730,7 +741,7 @@ PluginComponent {
                 enabled: containerData?.isRunning
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 3
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.openExec(containerData.id || containerData.name)
+                onTriggered: root.openExec(containerData)
             }
 
             ActionButton {
@@ -739,7 +750,7 @@ PluginComponent {
                 icon: "description"
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 4
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.openLogs(containerData.id || containerData.name)
+                onTriggered: root.openLogs(containerData)
             }
         }
     }
@@ -784,7 +795,7 @@ PluginComponent {
                 enabled: projectData?.runningCount < projectData?.totalCount
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 0
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData.workingDir, projectData.configFile, "start")
+                onTriggered: root.executeComposeAction(projectData, "start")
             }
 
             ActionButton {
@@ -794,7 +805,7 @@ PluginComponent {
                 enabled: projectData?.runningCount > 0
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 1
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData.workingDir, projectData.configFile, "restart")
+                onTriggered: root.executeComposeAction(projectData, "restart")
             }
 
             ActionButton {
@@ -804,7 +815,7 @@ PluginComponent {
                 enabled: projectData?.runningCount > 0
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 2
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData.workingDir, projectData.configFile, "stop")
+                onTriggered: root.executeComposeAction(projectData, "stop")
             }
 
             ActionButton {
@@ -813,7 +824,7 @@ PluginComponent {
                 icon: "description"
                 isSelected: parent.parent.isCurrentItem && root.selectedActionIndex === 3
                 leftIndent: parent.parent.leftIndent
-                onTriggered: root.executeComposeAction(projectData.workingDir, projectData.configFile, "logs")
+                onTriggered: root.executeComposeAction(projectData, "logs")
             }
         }
     }

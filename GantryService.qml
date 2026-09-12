@@ -44,14 +44,6 @@ Item {
 
     readonly property bool anyAvailable: Object.keys(runtimeAvailable).some(id => runtimeAvailable[id])
 
-    // Transitional: collection and actions still drive a single binary. Prefers a
-    // runtime that actually answered, so a stopped Docker does not blank the list
-    // while Podman is up. Phases 3-5 replace every use of this with real routing.
-    readonly property string primaryBinary: {
-        const rt = enabledRuntimes.find(r => runtimeAvailable[r.id]) || enabledRuntimes[0];
-        return rt ? rt.binary : "";
-    }
-
     // Settings are user-editable JSON; a half-written entry must not poison the
     // rest of the list, so every field falls back to a sane value.
     function normalizeRuntimes(list) {
@@ -401,17 +393,45 @@ Item {
         PluginService.setGlobalVar(pluginId, "composeProjects", composeProjects);
     }
 
-    function executeAction(containerId, action) {
+    // Resolves the binary for a runtime id, or "" if that runtime is unknown or
+    // disabled. Callers must abort on "" and never substitute a default: running
+    // `docker stop` against an id that belongs to Podman does nothing at best,
+    // and stops an unrelated container with the same name at worst.
+    function binaryFor(runtimeId, context) {
+        if (!runtimeId) {
+            console.error(`Gantry: ${context} requested without a runtime`);
+            return "";
+        }
+
+        const rt = runtimes.find(r => r.id === runtimeId);
+        if (!rt) {
+            console.error(`Gantry[${runtimeId}]: ${context} refused, unknown runtime`);
+            return "";
+        }
+        if (!rt.enabled) {
+            console.error(`Gantry[${runtimeId}]: ${context} refused, runtime is disabled`);
+            return "";
+        }
+        return rt.binary;
+    }
+
+    function executeAction(runtimeId, containerId, action) {
+        const binary = binaryFor(runtimeId, `action '${action}'`);
+        if (!binary) {
+            return false;
+        }
+
         const commands = {
-            start: [primaryBinary, "start", containerId],
-            stop: [primaryBinary, "stop", containerId],
-            restart: [primaryBinary, "restart", containerId],
-            pause: [primaryBinary, "pause", containerId],
-            unpause: [primaryBinary, "unpause", containerId]
+            start: [binary, "start", containerId],
+            stop: [binary, "stop", containerId],
+            restart: [binary, "restart", containerId],
+            pause: [binary, "pause", containerId],
+            unpause: [binary, "unpause", containerId]
         };
 
         if (commands[action]) {
             const cmdArray = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...commands[action]] : commands[action];
+            console.log(`Gantry[${runtimeId}]: ${action} ${containerId}`);
             Quickshell.execDetached(cmdArray);
             Qt.callLater(() => {
                 root.refresh();
@@ -421,24 +441,30 @@ Item {
         return false;
     }
 
-    function executeComposeAction(workingDir, configFile, action) {
+    function executeComposeAction(runtimeId, workingDir, configFile, action) {
+        const binary = binaryFor(runtimeId, `compose action '${action}'`);
+        if (!binary) {
+            return false;
+        }
+
         if (!workingDir) {
-            console.error("Gantry: Cannot execute compose action without working directory");
+            console.error(`Gantry[${runtimeId}]: cannot execute compose action without working directory`);
             return false;
         }
 
         const composeCommands = {
-            up: [primaryBinary, "compose", "-f", configFile, "up", "-d"],
-            down: [primaryBinary, "compose", "-f", configFile, "down"],
-            restart: [primaryBinary, "compose", "-f", configFile, "restart"],
-            stop: [primaryBinary, "compose", "-f", configFile, "stop"],
-            start: [primaryBinary, "compose", "-f", configFile, "start"],
-            pull: [primaryBinary, "compose", "-f", configFile, "pull"],
+            up: [binary, "compose", "-f", configFile, "up", "-d"],
+            down: [binary, "compose", "-f", configFile, "down"],
+            restart: [binary, "compose", "-f", configFile, "restart"],
+            stop: [binary, "compose", "-f", configFile, "stop"],
+            start: [binary, "compose", "-f", configFile, "start"],
+            pull: [binary, "compose", "-f", configFile, "pull"],
             logs: null
         };
 
         if (action === "logs") {
-            const cmd = `cd "${workingDir}" && ${primaryBinary} compose -f ${configFile} logs -f`;
+            const cmd = `cd "${workingDir}" && ${binary} compose -f ${configFile} logs -f`;
+            console.log(`Gantry[${runtimeId}]: compose logs in ${workingDir}`);
             Quickshell.execDetached(["sh", "-c", `${terminalApp} -e sh -c '${cmd}'`]);
             return true;
         }
@@ -446,6 +472,7 @@ Item {
         if (composeCommands[action]) {
             const cmd = ["sh", "-c", `cd "${workingDir}" && ${composeCommands[action].join(" ")}`];
             const cmdArray = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...cmd] : cmd;
+            console.log(`Gantry[${runtimeId}]: compose ${action} in ${workingDir}`);
             Quickshell.execDetached(cmdArray);
             Qt.callLater(() => {
                 root.refresh();
@@ -455,11 +482,23 @@ Item {
         return false;
     }
 
-    function openLogs(containerId) {
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + primaryBinary + " logs -f " + containerId]);
+    function openLogs(runtimeId, containerId) {
+        const binary = binaryFor(runtimeId, "logs");
+        if (!binary) {
+            return false;
+        }
+        console.log(`Gantry[${runtimeId}]: logs ${containerId}`);
+        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + binary + " logs -f " + containerId]);
+        return true;
     }
 
-    function openExec(containerId) {
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + primaryBinary + " exec -it " + containerId + " " + shellPath]);
+    function openExec(runtimeId, containerId) {
+        const binary = binaryFor(runtimeId, "exec");
+        if (!binary) {
+            return false;
+        }
+        console.log(`Gantry[${runtimeId}]: exec ${containerId}`);
+        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + binary + " exec -it " + containerId + " " + shellPath]);
+        return true;
     }
 }
