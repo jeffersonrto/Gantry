@@ -763,6 +763,12 @@ PluginComponent {
             id: popout
             focus: true
 
+            // PluginPopout rebinds its content height to this item's
+            // implicitHeight, so a FocusScope without one collapses to zero and
+            // the popup opens empty.
+            implicitWidth: root.popoutWidth
+            implicitHeight: root.popoutHeight
+
             property var parentPopout: null
 
             Connections {
@@ -801,8 +807,9 @@ PluginComponent {
 
             Column {
                 id: popoutColumn
-                anchors.fill: parent
-                anchors.margins: 14
+                x: 14
+                y: 14
+                width: popout.width - 28
                 spacing: 12
 
                 // ---------- segmented control (root only) ----------
@@ -915,8 +922,12 @@ PluginComponent {
 
                 // ---------- body ----------
                 Item {
+                    id: bodyArea
                     width: parent.width
-                    height: Math.max(0, popoutColumn.height - y)
+                    // Derived from root state, never from popoutColumn's own
+                    // height -- that would be a binding loop through
+                    // implicitHeight.
+                    height: Math.max(0, root.popoutHeight - 28 - y)
 
                     // no runtime at all
                     EmptyState {
