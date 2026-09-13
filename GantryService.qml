@@ -448,11 +448,13 @@ Item {
     // still moves the work into its own unit, so it outlives the shell, and
     // systemd-run reports the command's exit status back. No timeout: Proc kills
     // the process when it fires, and a compose pull or a slow stop can take minutes.
-    function runAction(id, argv, onDone) {
+    // No id either: Proc debounces by id, so a second action on the same target
+    // would silently replace the first and its callback would never come back.
+    function runAction(argv, onDone) {
         const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--quiet", "--", ...argv] : argv;
         const line = `${shellLine(wrapped)} 2>&1`;
 
-        Proc.runCommand(id, ["sh", "-c", line], (output, exitCode) => {
+        Proc.runCommand(null, ["sh", "-c", line], (output, exitCode) => {
             const message = String(output || "").trim();
             if (exitCode !== 0) {
                 console.error(`Gantry: command failed (exit ${exitCode}): ${message}`);
@@ -480,7 +482,7 @@ Item {
 
         if (commands[action]) {
             console.log(`Gantry[${runtimeId}]: ${action} ${containerId}`);
-            runAction(`${pluginId}.action.${runtimeId}.${containerId}`, commands[action], onDone);
+            runAction(commands[action], onDone);
             return true;
         }
         return false;
@@ -515,7 +517,7 @@ Item {
 
         if (composeCommands[action]) {
             console.log(`Gantry[${runtimeId}]: compose ${action} in ${workingDir}`);
-            runAction(`${pluginId}.compose.${runtimeId}.${workingDir}`, ["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine(composeCommands[action])}`], onDone);
+            runAction(["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine(composeCommands[action])}`], onDone);
             return true;
         }
         return false;

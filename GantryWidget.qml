@@ -23,7 +23,10 @@ PluginComponent {
     property int selectedIndex: 0
     property bool keyboardActive: false
 
-    property string pendingAction: ""
+    // Actions in flight, keyed by the target's key. Per target rather than
+    // global, so opening another sheet mid-action neither shows the spinner on
+    // the wrong row nor blocks the new target.
+    property var pendingActions: ({})
 
     property string toastKind: ""
     property string toastTitle: ""
@@ -93,6 +96,26 @@ PluginComponent {
     }
 
     readonly property var sheetServices: (level === "project" && openProject) ? openProject.containers : []
+
+    readonly property string sheetPendingAction: {
+        if (level === "container")
+            return pendingFor(openContainerKey);
+        if (level === "project")
+            return pendingFor(openProjectKey);
+        return "";
+    }
+
+    // A compose action touches every service of the project, and a service
+    // action touches the project, so each blocks the other while in flight.
+    readonly property bool sheetRelatedBusy: {
+        if (level === "container" && openContainer && openContainer.composeProject)
+            return pendingFor(`${openContainer.runtime}:${openContainer.composeProject}`) !== "";
+        if (level === "project" && openProject)
+            return openProject.containers.some(c => pendingFor(c.key) !== "");
+        return false;
+    }
+
+    readonly property bool sheetBlocked: sheetPendingAction !== "" || sheetRelatedBusy
 
     // ------------------------------------------------------------------
     // Helpers
@@ -295,6 +318,19 @@ PluginComponent {
     // ------------------------------------------------------------------
     // Actions
     // ------------------------------------------------------------------
+    function pendingFor(key) {
+        return (key && root.pendingActions[key]) || "";
+    }
+
+    function setPending(key, actionId) {
+        const next = Object.assign({}, root.pendingActions);
+        if (actionId)
+            next[key] = actionId;
+        else
+            delete next[key];
+        root.pendingActions = next;
+    }
+
     function runContainerAction(container, actionId) {
         if (!container)
             return;
@@ -310,9 +346,12 @@ PluginComponent {
             return;
         }
 
-        root.pendingAction = actionId;
+        const key = container.key;
+        if (root.pendingFor(key))
+            return;
+        root.setPending(key, actionId);
         const accepted = GantryService.executeAction(container.runtime, container.id || container.name, actionId, (success, message) => {
-            root.pendingAction = "";
+            root.setPending(key, "");
             if (success)
                 root.showToast("success", `${container.name} ${root.pastTense(actionId)}`, "");
             else
@@ -320,7 +359,7 @@ PluginComponent {
         });
 
         if (!accepted) {
-            root.pendingAction = "";
+            root.setPending(key, "");
             root.showToast("error", `Failed to ${actionId} ${container.name}`, "runtime unavailable");
         }
     }
@@ -335,9 +374,12 @@ PluginComponent {
             return;
         }
 
-        root.pendingAction = actionId;
+        const key = project.key;
+        if (root.pendingFor(key))
+            return;
+        root.setPending(key, actionId);
         const accepted = GantryService.executeComposeAction(project.runtime, project.workingDir, project.configFile, actionId, (success, message) => {
-            root.pendingAction = "";
+            root.setPending(key, "");
             if (success)
                 root.showToast("success", `${project.name} ${root.pastTense(actionId)}`, "");
             else
@@ -345,7 +387,7 @@ PluginComponent {
         });
 
         if (!accepted) {
-            root.pendingAction = "";
+            root.setPending(key, "");
             root.showToast("error", `Failed to ${actionId} ${project.name}`, "runtime unavailable");
         }
     }
@@ -452,7 +494,7 @@ PluginComponent {
         }
 
         const action = root.sheetActions[root.selectedIndex];
-        if (!action || root.pendingAction)
+        if (!action || root.sheetBlocked)
             return;
         if (root.level === "project")
             root.runProjectAction(root.openProject, action.id);
@@ -652,8 +694,8 @@ PluginComponent {
             id: actionMouse
             anchors.fill: parent
             hoverEnabled: true
-            enabled: !actionRow.blocked
-            cursorShape: actionRow.blocked ? Qt.ForbiddenCursor : Qt.PointingHandCursor
+            enabled: !actionRow.blocked && !actionRow.busy
+            cursorShape: actionRow.busy ? Qt.BusyCursor : actionRow.blocked ? Qt.ForbiddenCursor : Qt.PointingHandCursor
             onClicked: {
                 root.keyboardActive = false;
                 actionRow.activated();
@@ -1398,8 +1440,8 @@ PluginComponent {
                                         required property int index
                                         label: modelData.label
                                         icon: modelData.icon
-                                        busy: root.pendingAction === modelData.id
-                                        blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
+                                        busy: root.sheetPendingAction === modelData.id
+                                        blocked: root.sheetBlocked && !busy
                                         isSelected: root.keyboardActive && root.selectedIndex === index
                                         onActivated: root.runContainerAction(root.openContainer, modelData.id)
                                         onIsSelectedChanged: {
@@ -1439,8 +1481,8 @@ PluginComponent {
                                         required property int index
                                         label: modelData.label
                                         icon: modelData.icon
-                                        busy: root.pendingAction === modelData.id
-                                        blocked: root.pendingAction !== "" && root.pendingAction !== modelData.id
+                                        busy: root.sheetPendingAction === modelData.id
+                                        blocked: root.sheetBlocked && !busy
                                         isSelected: root.keyboardActive && root.sheetSection === "actions" && root.selectedIndex === index
                                         onActivated: root.runProjectAction(root.openProject, modelData.id)
                                         onIsSelectedChanged: {
