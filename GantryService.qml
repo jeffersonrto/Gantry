@@ -499,19 +499,23 @@ Item {
             return false;
         }
 
+        // The config_files label joins every -f the project was started with
+        // using commas, and compose will not split a single -f on them.
+        const compose = [binary, "compose"];
+        String(configFile || "").split(",").filter(f => f).forEach(f => compose.push("-f", f));
         const composeCommands = {
-            up: [binary, "compose", "-f", configFile, "up", "-d"],
-            down: [binary, "compose", "-f", configFile, "down"],
-            restart: [binary, "compose", "-f", configFile, "restart"],
-            stop: [binary, "compose", "-f", configFile, "stop"],
-            start: [binary, "compose", "-f", configFile, "start"],
-            pull: [binary, "compose", "-f", configFile, "pull"],
+            up: [...compose, "up", "-d"],
+            down: [...compose, "down"],
+            restart: [...compose, "restart"],
+            stop: [...compose, "stop"],
+            start: [...compose, "start"],
+            pull: [...compose, "pull"],
             logs: null
         };
 
         if (action === "logs") {
             console.log(`Gantry[${runtimeId}]: compose logs in ${workingDir}`);
-            openInTerminal(["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine([binary, "compose", "-f", configFile, "logs", "-f"])}`]);
+            openInTerminal(["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine([...compose, "logs", "-f"])}`]);
             return true;
         }
 
