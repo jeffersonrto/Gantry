@@ -3,7 +3,7 @@
 > Gantry is a fork of [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager)
 > by LuckShiba, extended with multi-runtime support. Licensed under GPL-3.0.
 
-![Preview of the plugin](./assets/screenshot.png)
+![Gantry listing Docker and Podman containers together](./assets/screenshot.png)
 
 Container monitoring and management plugin for [DankMaterialShell](https://danklinux.com/),
 built on [DmsDockerManager](https://github.com/LuckShiba/DmsDockerManager) and taking
@@ -24,6 +24,21 @@ down, the other keeps working.
 - Interactive shell and log tailing in your terminal
 - Per-runtime event listeners, so one runtime dying does not stop the other
 - Full keyboard navigation
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="33%"><img src="./assets/screenshot2.png" alt="Container sheet with state, metadata and actions"></td>
+    <td width="33%"><img src="./assets/screenshot3.png" alt="Compose view listing projects"></td>
+    <td width="33%"><img src="./assets/screenshot4.png" alt="Project sheet with actions and services"></td>
+  </tr>
+  <tr>
+    <td align="center">Container sheet</td>
+    <td align="center">Compose view</td>
+    <td align="center">Project sheet</td>
+  </tr>
+</table>
 
 ## Installation
 
@@ -171,8 +186,10 @@ Gantry draws on two plugins that solve this problem for DankMaterialShell:
 
 Both are worth a look if Gantry is not what you are after.
 
-The original plugin was itself inspired by the GNOME extension
-[Easy Docker Containers](https://extensions.gnome.org/extension/2224/easy-docker-containers/).
+Further back, both DmsDockerManager and Gantry trace their idea to the GNOME
+extension [Easy Docker Containers](https://extensions.gnome.org/extension/2224/easy-docker-containers/)
+— the extension I missed most after leaving GNOME, and much of the reason Gantry
+exists.
 
 ## License
 
