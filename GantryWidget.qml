@@ -859,8 +859,9 @@ PluginComponent {
     // ------------------------------------------------------------------
     // Bar pill
     // ------------------------------------------------------------------
-    component TrayIcon: DankNFIcon {
-        name: "docker"
+    // Runtime-neutral on purpose: a whale would say Docker-only.
+    component TrayIcon: DankIcon {
+        name: "deployed_code"
         size: root.iconSize
         color: (!root.anyRuntimeAvailable || globalRunningContainers.value === 0) ? Theme.surfaceVariantText : (Theme.widgetIconColor || Theme.surfaceText)
         opacity: (!root.anyRuntimeAvailable || globalRunningContainers.value === 0) ? 0.6 : 1
