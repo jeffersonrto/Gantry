@@ -190,7 +190,7 @@ Item {
             // starts, and Proc's callback is then never called at all -- which
             // would leave `pending` stuck above zero and freeze collection for
             // good. sh always exists and reports 127 instead.
-            Proc.runCommand(`${pluginId}.check.${rt.id}`, ["sh", "-c", `${rt.binary} info`], (stdout, exitCode) => {
+            Proc.runCommand(`${pluginId}.check.${rt.id}`, ["sh", "-c", `${shellQuote(rt.binary)} info`], (stdout, exitCode) => {
                 if (generation !== checkGeneration) {
                     console.log(`Gantry[${rt.id}]: stale availability check discarded`);
                     return;
@@ -240,7 +240,7 @@ Item {
         }
 
         targets.forEach(rt => {
-            Proc.runCommand(`${pluginId}.inspect.${rt.id}`, ["sh", "-c", `${rt.binary} container inspect $(${rt.binary} container ls -aq)`], (stdout, exitCode) => {
+            Proc.runCommand(`${pluginId}.inspect.${rt.id}`, ["sh", "-c", `${shellQuote(rt.binary)} container inspect $(${shellQuote(rt.binary)} container ls -aq)`], (stdout, exitCode) => {
                 if (generation !== fetchGeneration) {
                     console.log(`Gantry[${rt.id}]: stale container fetch discarded`);
                     return;
@@ -432,6 +432,16 @@ Item {
         return `'${String(value).replace(/'/g, "'\\''")}'`;
     }
 
+    function shellLine(argv) {
+        return argv.map(shellQuote).join(" ");
+    }
+
+    // terminalApp is left unquoted on purpose: it is a command line with its own
+    // arguments (e.g. "alacritty --hold"). Everything after -e is quoted.
+    function openInTerminal(argv) {
+        Quickshell.execDetached(["sh", "-c", `${terminalApp} -e ${shellLine(argv)}`]);
+    }
+
     // Actions run through Proc rather than execDetached so the caller learns the
     // exit code and the runtime's own message. stderr is folded into stdout
     // because Proc only hands the callback stdout. systemd-run --user --scope
@@ -440,7 +450,7 @@ Item {
     // the process when it fires, and a compose pull or a slow stop can take minutes.
     function runAction(id, argv, onDone) {
         const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--quiet", "--", ...argv] : argv;
-        const line = `${wrapped.map(shellQuote).join(" ")} 2>&1`;
+        const line = `${shellLine(wrapped)} 2>&1`;
 
         Proc.runCommand(id, ["sh", "-c", line], (output, exitCode) => {
             const message = String(output || "").trim();
@@ -498,15 +508,14 @@ Item {
         };
 
         if (action === "logs") {
-            const cmd = `cd "${workingDir}" && ${binary} compose -f ${configFile} logs -f`;
             console.log(`Gantry[${runtimeId}]: compose logs in ${workingDir}`);
-            Quickshell.execDetached(["sh", "-c", `${terminalApp} -e sh -c '${cmd}'`]);
+            openInTerminal(["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine([binary, "compose", "-f", configFile, "logs", "-f"])}`]);
             return true;
         }
 
         if (composeCommands[action]) {
             console.log(`Gantry[${runtimeId}]: compose ${action} in ${workingDir}`);
-            runAction(`${pluginId}.compose.${runtimeId}.${workingDir}`, ["sh", "-c", `cd ${shellQuote(workingDir)} && ${composeCommands[action].join(" ")}`], onDone);
+            runAction(`${pluginId}.compose.${runtimeId}.${workingDir}`, ["sh", "-c", `cd ${shellQuote(workingDir)} && ${shellLine(composeCommands[action])}`], onDone);
             return true;
         }
         return false;
@@ -518,7 +527,7 @@ Item {
             return false;
         }
         console.log(`Gantry[${runtimeId}]: logs ${containerId}`);
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + binary + " logs -f " + containerId]);
+        openInTerminal([binary, "logs", "-f", containerId]);
         return true;
     }
 
@@ -528,7 +537,7 @@ Item {
             return false;
         }
         console.log(`Gantry[${runtimeId}]: exec ${containerId}`);
-        Quickshell.execDetached(["sh", "-c", terminalApp + " -e " + binary + " exec -it " + containerId + " " + shellPath]);
+        openInTerminal([binary, "exec", "-it", containerId, shellPath]);
         return true;
     }
 }
