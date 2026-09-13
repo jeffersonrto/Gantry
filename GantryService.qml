@@ -447,7 +447,7 @@ Item {
     // because Proc only hands the callback stdout. systemd-run --user --scope
     // still moves the work into its own unit, so it outlives the shell, and
     // systemd-run reports the command's exit status back. No timeout: Proc kills
-    // the process when it fires, and a compose pull or a slow stop can take minutes.
+    // the process when it fires, and a compose restart or a slow stop can take minutes.
     // No id either: Proc debounces by id, so a second action on the same target
     // would silently replace the first and its callback would never come back.
     function runAction(argv, onDone) {
@@ -504,12 +504,9 @@ Item {
         const compose = [binary, "compose"];
         String(configFile || "").split(",").filter(f => f).forEach(f => compose.push("-f", f));
         const composeCommands = {
-            up: [...compose, "up", "-d"],
-            down: [...compose, "down"],
             restart: [...compose, "restart"],
             stop: [...compose, "stop"],
             start: [...compose, "start"],
-            pull: [...compose, "pull"],
             logs: null
         };
 
