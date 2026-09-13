@@ -188,6 +188,18 @@ PluginComponent {
         return parts.length > 0 ? parts.join(" ") : "0s";
     }
 
+    // Replicas of one service would all read the same, so they get the replica
+    // number the runtime gave them.
+    function serviceLabel(container, siblings) {
+        if (!container.composeService)
+            return container.name;
+        const replicas = (siblings || []).filter(c => c.composeService === container.composeService).length;
+        if (replicas < 2)
+            return container.composeService;
+        const number = container.composeNumber || (container.name.match(/[-_](\d+)$/) || [])[1];
+        return number ? `${container.composeService}-${number}` : container.name;
+    }
+
     function containerActions(container) {
         const list = [];
         if (container.isRunning)
@@ -196,7 +208,7 @@ PluginComponent {
                 label: "Restart",
                 icon: "refresh"
             });
-        else
+        else if (!container.isPaused)
             list.push({
                 id: "start",
                 label: "Start",
@@ -1307,7 +1319,7 @@ PluginComponent {
                                         MetaField {
                                             label: "Uptime"
                                             width: (parent.width - 12) / 2
-                                            visible: root.openContainer?.isRunning ?? false
+                                            visible: (root.openContainer?.isRunning || root.openContainer?.isPaused) ?? false
 
                                             StyledText {
                                                 text: {
@@ -1546,7 +1558,7 @@ PluginComponent {
                                             spacing: 1
 
                                             StyledText {
-                                                text: serviceRow.modelData.composeService || serviceRow.modelData.name
+                                                text: root.serviceLabel(serviceRow.modelData, root.sheetServices)
                                                 font.pixelSize: 14
                                                 font.weight: Font.Medium
                                                 color: Theme.surfaceText

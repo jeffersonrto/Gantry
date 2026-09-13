@@ -318,7 +318,9 @@ Item {
                     status: `${state.charAt(0).toUpperCase() + state.slice(1)}`,
                     state: state,
                     image: container.Config?.Image || container.ImageName || "",
-                    isRunning: container.State?.Running || false,
+                    // Docker reports a paused container as Running, Podman does not.
+                    // Paused is its own state here, so both runtimes agree.
+                    isRunning: (container.State?.Running && !container.State?.Paused) || false,
                     isPaused: container.State?.Paused || false,
                     created: container.Created || "",
                     lastActivity: lastActivity,
@@ -332,6 +334,7 @@ Item {
                     ports: ports,
                     composeProject: labels["com.docker.compose.project"] || labels["io.podman.compose.project"] || "",
                     composeService: labels["com.docker.compose.service"] || labels["io.podman.compose.service"] || "",
+                    composeNumber: labels["com.docker.compose.container-number"] || "",
                     composeWorkingDir: labels["com.docker.compose.project.working_dir"] || "",
                     composeConfigFiles: labels["com.docker.compose.project.config_files"] || "compose.yaml"
                 };
