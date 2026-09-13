@@ -436,7 +436,8 @@ Item {
     // exit code and the runtime's own message. stderr is folded into stdout
     // because Proc only hands the callback stdout. systemd-run --user --scope
     // still moves the work into its own unit, so it outlives the shell, and
-    // systemd-run reports the command's exit status back.
+    // systemd-run reports the command's exit status back. No timeout: Proc kills
+    // the process when it fires, and a compose pull or a slow stop can take minutes.
     function runAction(id, argv, onDone) {
         const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...argv] : argv;
         const line = `${wrapped.map(shellQuote).join(" ")} 2>&1`;
@@ -450,7 +451,7 @@ Item {
             if (onDone) {
                 onDone(exitCode === 0, message);
             }
-        }, 0, 60000);
+        }, 0, Proc.noTimeout);
     }
 
     function executeAction(runtimeId, containerId, action, onDone) {
