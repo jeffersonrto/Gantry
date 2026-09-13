@@ -106,8 +106,9 @@ path:
 
 - **Toggle** — whether Gantry watches that runtime at all. A disabled runtime is
   never queried, never listed, and refuses any action aimed at it.
-- **Binary** — the command to run. A bare name is resolved on `PATH`; an absolute
-  path works too, which is how you point at a non-standard install or a wrapper.
+- **Binary** — the executable to run. A bare name is resolved on `PATH`; an
+  absolute path works too. It takes no arguments: to add flags (say,
+  `podman --remote`), point it at a small wrapper script.
 
 Turn off what you do not use. With a single runtime enabled, the runtime badges
 disappear from the list — they would be noise.
@@ -122,8 +123,8 @@ disappear from the list — they would be noise.
   (default: `alacritty --hold`). Gantry appends `-e <command>` itself, so leave
   `-e` out of this setting. Examples: `alacritty --hold`,
   `ghostty --wait-after-command`, `kitty --hold`, `foot --hold`.
-- **Shell Path** — shell to run inside containers. Many images only ship
-  `/bin/sh` (default: `/bin/sh`).
+- **Shell Path** — path of the shell to run inside containers, without
+  arguments. Many images only ship `/bin/sh` (default: `/bin/sh`).
 
 ## Usage
 
