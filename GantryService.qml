@@ -439,7 +439,7 @@ Item {
     // systemd-run reports the command's exit status back. No timeout: Proc kills
     // the process when it fires, and a compose pull or a slow stop can take minutes.
     function runAction(id, argv, onDone) {
-        const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--", ...argv] : argv;
+        const wrapped = systemdRunAvailable ? ["systemd-run", "--user", "--scope", "--quiet", "--", ...argv] : argv;
         const line = `${wrapped.map(shellQuote).join(" ")} 2>&1`;
 
         Proc.runCommand(id, ["sh", "-c", line], (output, exitCode) => {
