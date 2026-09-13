@@ -649,7 +649,7 @@ PluginComponent {
         width: parent ? parent.width : 0
         height: 42
         radius: 14
-        color: (isSelected || rowMouse.containsMouse) ? Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency) : "transparent"
+        color: (isSelected || rowMouse.containsMouse) ? Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency) : "transparent"
 
         MouseArea {
             id: rowMouse
@@ -676,7 +676,7 @@ PluginComponent {
         height: 44
         radius: 14
         opacity: blocked && !busy ? 0.5 : 1
-        color: (isSelected || actionMouse.containsMouse) && !blocked ? Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency) : "transparent"
+        color: (isSelected || actionMouse.containsMouse) && !blocked ? Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency) : "transparent"
 
         Row {
             anchors.left: parent.left
