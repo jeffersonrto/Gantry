@@ -228,7 +228,9 @@ PluginComponent {
                 icon: "pause"
             });
 
-        if (container.isRunning || container.isPaused)
+        // Not offered while paused: Podman refuses to stop a paused container
+        // ("container state improper"), so unpause comes first on every runtime.
+        if (container.isRunning)
             list.push({
                 id: "stop",
                 label: "Stop",
