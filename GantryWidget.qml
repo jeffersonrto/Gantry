@@ -120,20 +120,30 @@ PluginComponent {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+    // The theme's success and warning are saturated mid-tones. On a dark surface
+    // they are pulled toward the text color, which gives the pastel green and
+    // amber the design uses; the light theme keeps them as they are.
+    function statusTone(color) {
+        return Theme.isLightMode ? color : Theme.blend(color, Theme.surfaceText, 0.35);
+    }
+
+    readonly property color runningColor: statusTone(Theme.success)
+    readonly property color pausedColor: statusTone(Theme.warning)
+
     function stateColor(container) {
         if (!container)
             return Theme.surfaceVariantText;
         if (container.health === "unhealthy")
             return Theme.error;
         if (container.isPaused)
-            return Theme.warning;
+            return root.pausedColor;
         if (container.isRunning)
-            return Theme.primary;
+            return root.runningColor;
         return Theme.surfaceVariantText;
     }
 
     function runtimeTint(runtimeId) {
-        return runtimeId === "podman" ? Theme.warning : Theme.primary;
+        return runtimeId === "podman" ? root.pausedColor : Theme.primary;
     }
 
     // Shown instead of the image for anything that is not running.
@@ -722,7 +732,7 @@ PluginComponent {
         property string icon: "deployed_code"
         property string title: ""
         property string subtitle: ""
-        property color iconColor: Theme.surfaceVariantText
+        property color iconColor: Theme.withAlpha(Theme.surfaceVariantText, 0.4)
 
         width: parent ? parent.width : 0
         topPadding: 32
@@ -745,7 +755,7 @@ PluginComponent {
         }
 
         StyledText {
-            width: emptyState.width - 40
+            width: Math.min(emptyState.width - 40, 280)
             anchors.horizontalCenter: parent.horizontalCenter
             text: emptyState.subtitle
             font.pixelSize: 12
@@ -773,13 +783,13 @@ PluginComponent {
             radius: 12
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            color: backMouse.containsMouse ? Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency) : Theme.withAlpha(Theme.surfaceContainer, Theme.popupTransparency)
+            color: backMouse.containsMouse ? Theme.surfaceContainerHighest : Theme.surfaceContainerHigh
 
             DankIcon {
                 anchors.centerIn: parent
                 name: "arrow_back"
                 size: 20
-                color: Theme.surfaceText
+                color: Theme.primary
             }
 
             MouseArea {
@@ -1038,7 +1048,7 @@ PluginComponent {
                     height: 34
                     radius: 14
                     visible: root.partiallyDown
-                    color: Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.16)
+                    color: Theme.withAlpha(root.pausedColor, 0.12)
 
                     Row {
                         anchors.left: parent.left
@@ -1049,14 +1059,14 @@ PluginComponent {
                         DankIcon {
                             name: "warning"
                             size: 18
-                            color: Theme.warning
+                            color: root.pausedColor
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
                         StyledText {
                             text: `${root.downRuntimeIds.join(", ")} unavailable — showing ${root.availableRuntimeIds.join(", ")} only`
                             font.pixelSize: 12
-                            color: Theme.warning
+                            color: Theme.surfaceText
                             anchors.verticalCenter: parent.verticalCenter
                         }
                     }
@@ -1623,7 +1633,7 @@ PluginComponent {
                             DankIcon {
                                 name: root.toastKind === "error" ? "error" : "check_circle"
                                 size: 18
-                                color: root.toastKind === "error" ? Theme.error : Theme.primary
+                                color: root.toastKind === "error" ? Theme.error : root.runningColor
                             }
 
                             Column {
